@@ -51,6 +51,23 @@ Never pass `volumeInGb` with `networkVolumeId`. Leave the start command empty (i
 | Refresh (packages/ commit) | hook warns about daemon restart; refuses while agents work unless forced |
 | mirror | `deploy/pod-mirror.sh --host <ip> --port <p> ~/Desktop/prime-agent-pod` shows `/workspace` locally |
 
+## Live ids (2026-09-03)
+
+| thing | id |
+|---|---|
+| network volume `prime-agent-eray-vol` (EU-RO-1, 50 GB) | `y0n17rf3mc` |
+| template `prime-agent-eray` (image + registry auth + env) | `mmv355evu2` |
+| pod `prime-agent-eray` (cpu3g-4-16, $0.16/h) | `26qbk1ihcmfsmh` → https://26qbk1ihcmfsmh-8790.proxy.runpod.net |
+| image | `ghcr.io/erikcik/prime-agent-eray:0.1.0` (= `latest`) |
+
+**How the pod was actually created.** Neither the `runpod` MCP `create-pod` tool nor `runpodctl pod create`
+can pick a CPU instance size or (MCP) attach a network volume: both fall back to the smallest flavor and
+fail with "Container Disk must be less than or equal to 20/30". The working route is the GraphQL mutation
+`deployCpuPod(input: deployCpuPodInput!)` with `instanceId: "cpu3g-4-16"`, `templateId`, `networkVolumeId`,
+`volumeMountPath`, `containerDiskInGb`, `ports: "8790/http,22/tcp"`, `containerRegistryAuthId`,
+`cloudType: SECURE`, `env: [{key,value}]`, authenticated with `?api_key=` (the `~/.runpod/config.toml`
+value is single-quoted — strip the quotes). Script: `deploy/runpod-deploy.py`.
+
 ## Results
 
 _(filled in by the stress-test run; see `deploy/stress-test-<date>.md`)_
