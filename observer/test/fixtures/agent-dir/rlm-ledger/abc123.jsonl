@@ -1,0 +1,4 @@
+{"v": 1, "op": "meta", "sessionsDir": "__AGENT_DIR__/sessions"}
+{"v": 1, "op": "spawn", "at": "2026-09-01T10:00:03.000Z", "childId": "sub-deadbeef", "parent": "__AGENT_DIR__/sessions/01a0aaaa-0000-7000-8000-000000000001.jsonl", "child": "__AGENT_DIR__/session-artifacts/01a0aaaa-0000-7000-8000-000000000001/sub-deadbeef/01a0bbbb-0000-7000-8000-000000000002.jsonl", "depth": 1, "name": "helper"}
+{"v": 1, "op": "spawn", "at": "2026-09-01T10:00:20.000Z", "childId": "sub-00000001", "parent": "__AGENT_DIR__/sessions/01a0aaaa-0000-7000-8000-000000000001.jsonl", "child": "__AGENT_DIR__/session-artifacts/01a0aaaa-0000-7000-8000-000000000001/sub-00000001/missing.jsonl", "depth": 1, "name": "ghost"}
+{"v": 1, "op": "delete", "at": "2026-09-01T10:00:30.000Z", "childId": "sub-00000001", "child": "__AGENT_DIR__/session-artifacts/01a0aaaa-0000-7000-8000-000000000001/sub-00000001/missing.jsonl", "reason": "user"}

@@ -1,0 +1,200 @@
+import { mkdirSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { join } from "node:path";
+import { VERSION as HARNESS_VERSION } from "@earendil-works/pi-coding-agent";
+import type { ServerMessage } from "../shared/ws.ts";
+import { hasQueryToken, httpAuthorized } from "./auth.ts";
+import { CommsIndex } from "./comms/comms-index.ts";
+import { DaemonBridge } from "./daemon/bridge.ts";
+import { DaemonCommands } from "./daemon/commands.ts";
+import { SessionStreamer } from "./daemon/session-streamer.ts";
+import { DeployRunner, RESTART_EXIT_CODE } from "./deploy/runner.ts";
+import { agentPaths } from "./disk/paths.ts";
+import { AgentDirWatcher } from "./disk/watcher.ts";
+import { loadEnv } from "./env.ts";
+import { HtmlExporter } from "./export/html-export.ts";
+import { FleetService } from "./fleet/fleet-service.ts";
+import { Router, sendJson } from "./http/router.ts";
+import { registerRoutes } from "./http/routes.ts";
+import { serveStatic } from "./http/static.ts";
+import { logger } from "./log.ts";
+import { Hub } from "./ws/hub.ts";
+
+const log = logger("main");
+
+export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): Promise<{ close: () => Promise<void>; port: number }> {
+	const env = loadEnv({ ...process.env, ...overrides });
+	const serverStartedAt = new Date().toISOString();
+	const observerVersion = readObserverVersion(env.observerRoot);
+	mkdirSync(env.dataDir, { recursive: true });
+	const paths = agentPaths(env.agentDir, process.env.PRIME_AGENT_SESSION_DIR || undefined);
+
+	const bridge = new DaemonBridge(env.daemonSocket);
+	const commands = new DaemonCommands(bridge);
+	const watcher = new AgentDirWatcher({
+		sessions: paths.sessionsDir,
+		artifacts: paths.artifactsRoot,
+		ledger: paths.ledgerDir,
+		harness: paths.globalHarnessDir,
+		skills: paths.skillsDir,
+	});
+	const fleet = new FleetService(bridge, paths, watcher);
+	const streamer = new SessionStreamer(bridge);
+	const comms = new CommsIndex();
+	const exporter = new HtmlExporter(env.repoRoot, join(env.dataDir, "exports"));
+
+	let shuttingDown = false;
+	const hub = new Hub({
+		token: env.token,
+		insecureLocal: env.insecureLocal,
+		allowedOrigins: env.allowedOrigins,
+		serverStartedAt,
+		version: observerVersion,
+		subscribeSession: async (activeSessionId, send) => {
+			const node = fleet.findNode(activeSessionId);
+			const sessionId = node?.sessionId ?? activeSessionId;
+			return streamer.subscribe(activeSessionId, (ev) => {
+				switch (ev.kind) {
+					case "snapshot":
+						send({ t: "session.snapshot", activeSessionId, snapshot: ev.snapshot });
+						break;
+					case "event": {
+						const e = ev.event as { type?: string; message?: Record<string, unknown> };
+						if (e.type === "ipython_sent_agent_message" && e.message) {
+							const rec = comms.recordSent(sessionId, activeSessionId, e.message);
+							hub.publish("comms", { t: "comms.message", record: rec });
+						}
+						send({ t: "session.event", activeSessionId, event: ev.event });
+						break;
+					}
+					case "status":
+						send({ t: "session.status", activeSessionId, recap: ev.recap });
+						break;
+					case "connection":
+						send({ t: "session.connection", activeSessionId, status: ev.status });
+						break;
+					case "children":
+						send({ t: "session.children", activeSessionId, children: ev.children });
+						break;
+					case "closed":
+						send({ t: "session.closed", activeSessionId, reason: ev.reason });
+						break;
+				}
+			});
+		},
+		onFirstSubscribe: (topic, send) => {
+			if (topic === "fleet") send({ t: "fleet.snapshot", tree: fleet.current() });
+			if (topic === "daemon") send({ t: "daemon.state", daemon: bridge.info() });
+		},
+	});
+
+	const deploy = new DeployRunner({
+		hookPath: env.deployHook,
+		repoRoot: env.repoRoot,
+		dataDir: env.dataDir,
+		port: env.port,
+		agentDir: env.agentDir,
+		onStarted: (runId) => hub.publish("deploy", { t: "deploy.started", runId }),
+		onLine: (runId, line, stream) => hub.publish("deploy", { t: "deploy.log", runId, line, stream, at: new Date().toISOString() }),
+		onDone: (runId, exitCode, willRestart) => hub.publish("deploy", { t: "deploy.done", runId, exitCode, willRestart }),
+		requestRestart: () => {
+			log.info(`deploy succeeded; exiting with ${RESTART_EXIT_CODE} for the supervisor to restart`);
+			void shutdown(RESTART_EXIT_CODE);
+		},
+	});
+
+	fleet.onTree((tree) => hub.publish("fleet", { t: "fleet.snapshot", tree }));
+	bridge.subscribe({ onState: (info) => hub.publish("daemon", { t: "daemon.state", daemon: info }) });
+	watcher.onChange((events) => {
+		if (events.some((e) => e.area === "harness")) hub.publish("harness", { t: "harness.changed", scope: "global" });
+		if (events.some((e) => e.area === "artifacts" && e.path.includes("/harness/"))) hub.publish("harness", { t: "harness.changed", scope: "local" });
+		if (events.some((e) => e.path.endsWith("scheduled-jobs.json"))) hub.publish("schedules", { t: "schedules.changed" });
+	});
+
+	const router = new Router();
+	registerRoutes(router, {
+		env,
+		paths,
+		bridge,
+		commands,
+		fleet,
+		streamer,
+		comms,
+		deploy,
+		exporter,
+		hub,
+		serverStartedAt,
+		versions: { observer: observerVersion, harness: HARNESS_VERSION },
+	});
+
+	const server = createServer(async (req, res) => {
+		const url = req.url ?? "/";
+		if (url.startsWith("/api/")) {
+			if (hasQueryToken(url)) {
+				sendJson(res, 400, { error: "tokens in query strings are not accepted" });
+				return;
+			}
+			if (!url.startsWith("/api/health") && !httpAuthorized(req, env)) {
+				res.setHeader("www-authenticate", "Bearer");
+				sendJson(res, 401, { error: "invalid or missing bearer token", code: "unauthorized" });
+				return;
+			}
+			const handled = await router.dispatch(req, res);
+			if (!handled) sendJson(res, 404, { error: "not found" });
+			return;
+		}
+		serveStatic(env.webDist, req, res);
+	});
+	server.on("upgrade", (req, socket, head) => {
+		if ((req.url ?? "").split("?")[0] !== "/ws") {
+			socket.destroy();
+			return;
+		}
+		hub.handleUpgrade(req, socket, head as Buffer);
+	});
+
+	async function shutdown(exitCode: number): Promise<void> {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		hub.closeAll(1012, "restarting");
+		watcher.stop();
+		bridge.stop();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		setTimeout(() => process.exit(exitCode), 200);
+	}
+
+	process.on("SIGTERM", () => void shutdown(0));
+	process.on("SIGINT", () => void shutdown(0));
+
+	watcher.start();
+	bridge.start();
+	await fleet.start();
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(env.port, env.host, () => resolve());
+	});
+	const address = server.address();
+	const port = typeof address === "object" && address ? address.port : env.port;
+	// With PRIME_OBSERVER_PORT=0 the real port is only known now; allow the loopback origins for it.
+	env.allowedOrigins.add(`http://localhost:${port}`);
+	env.allowedOrigins.add(`http://127.0.0.1:${port}`);
+	log.info(`prime observer ${observerVersion} listening on http://${env.host}:${port}/ (agent dir ${env.agentDir}, socket ${bridge.socketPath})`);
+	log.info(`allowed origins: ${[...env.allowedOrigins].join(", ")}`);
+	return { close: () => shutdown(0), port };
+}
+
+function readObserverVersion(observerRoot: string): string {
+	try {
+		return (JSON.parse(readFileSync(join(observerRoot, "package.json"), "utf8")) as { version?: string }).version ?? "0.0.0";
+	} catch {
+		return "0.0.0";
+	}
+}
+
+const isMain = process.argv[1] && /main\.(js|ts)$/.test(process.argv[1]);
+if (isMain) {
+	startServer().catch((e) => {
+		log.error("failed to start", e);
+		process.exit(1);
+	});
+}

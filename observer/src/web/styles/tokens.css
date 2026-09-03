@@ -1,0 +1,31 @@
+/* Design tokens. White paper, near-black ink, one accent spent only where the machine is alive
+   (running, waiting on the human, failed) or on the primary action. Geist for human copy,
+   Geist Mono for everything the harness owns (ids, paths, statuses, timestamps, logs, counters). */
+:root {
+	--ink: #0a0a0a;
+	--ink-soft: #2b2b2b;
+	--paper: #ffffff;
+	--accent: #ff5777;
+	--accent-deep: #e63e60;
+	--line: #ececec;
+	--line-strong: #d8d8d8;
+	--mute: #8b8b8b;
+	--mute-soft: #b3b3b3;
+	--faint: #fafafa;
+	--tint: #fff2f5;
+	--tint-border: #ffd3dd;
+
+	--sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+	--mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+	--r-pill: 999px;
+	--r-card: 8px;
+	--r-small: 6px;
+	--hair: 1px solid var(--line);
+	--hair-strong: 1px solid var(--line-strong);
+
+	color-scheme: light;
+	font-family: var(--sans);
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+}

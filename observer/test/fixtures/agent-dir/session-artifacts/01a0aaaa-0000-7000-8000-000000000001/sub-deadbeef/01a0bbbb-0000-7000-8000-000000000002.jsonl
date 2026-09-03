@@ -1,0 +1,3 @@
+{"type": "session", "version": 3, "id": "01a0bbbb-0000-7000-8000-000000000002", "timestamp": "2026-09-01T10:00:03.000Z", "cwd": "/tmp/project", "rlmDepth": 1}
+{"type": "message", "id": "c1", "parentId": null, "timestamp": "2026-09-01T10:00:03.500Z", "message": {"role": "user", "content": [{"type": "text", "text": "Help with tests"}], "timestamp": 1}}
+{"type": "message", "id": "c2", "parentId": "c1", "timestamp": "2026-09-01T10:00:04.000Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}], "provider": "nano-gpt", "model": "abliteration-ai/abliterated-model-large-v2", "usage": {"input": 50, "output": 5, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 55, "cost": {"total": 0.000275}}, "stopReason": "stop", "timestamp": 2}}

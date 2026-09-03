@@ -1,0 +1,18 @@
+{
+ "type": "rlm_subagent",
+ "childId": "sub-deadbeef",
+ "sessionName": "helper",
+ "sessionDir": "__AGENT_DIR__/session-artifacts/01a0aaaa-0000-7000-8000-000000000001/sub-deadbeef",
+ "sessionFile": "__AGENT_DIR__/session-artifacts/01a0aaaa-0000-7000-8000-000000000001/sub-deadbeef/01a0bbbb-0000-7000-8000-000000000002.jsonl",
+ "rlmMaxDepth": 2,
+ "rlmParentNodeId": "sub-deadbeef",
+ "prompt": "Help with tests",
+ "spawnCode": "await rlm('Help with tests', name='helper')",
+ "model": {
+  "provider": "nano-gpt",
+  "modelId": "abliteration-ai/abliterated-model-large-v2"
+ },
+ "status": "completed",
+ "createdAt": 1788343203000,
+ "updatedAt": "2026-09-01T10:00:04.000Z"
+}
