@@ -11,6 +11,8 @@ interface Conn {
 	authed: boolean;
 	alive: boolean;
 	sessionUnsubs: Map<string, () => void>;
+	/** Session ids with an attach in flight, so a sub/unsub/sub burst yields exactly one stream. */
+	pendingSubs: Set<string>;
 }
 
 export interface HubOptions {
@@ -58,7 +60,7 @@ export class Hub {
 	}
 
 	private accept(ws: WebSocket, preAuthed: boolean): void {
-		const conn: Conn = { ws, topics: new Set(), authed: preAuthed, alive: true, sessionUnsubs: new Map() };
+		const conn: Conn = { ws, topics: new Set(), authed: preAuthed, alive: true, sessionUnsubs: new Map(), pendingSubs: new Set() };
 		this.conns.add(conn);
 		const authTimer = preAuthed
 			? undefined
@@ -109,11 +111,15 @@ export class Hub {
 					const send = (m: ServerMessage) => this.send(conn, m);
 					if (isSessionTopic(topic)) {
 						const id = topic.slice("session:".length);
+						if (conn.sessionUnsubs.has(id) || conn.pendingSubs.has(id)) continue;
+						conn.pendingSubs.add(id);
 						try {
 							const off = await this.opts.subscribeSession(id, send);
-							if (conn.topics.has(topic)) conn.sessionUnsubs.set(id, off);
+							conn.pendingSubs.delete(id);
+							if (conn.topics.has(topic) && !conn.sessionUnsubs.has(id)) conn.sessionUnsubs.set(id, off);
 							else off();
 						} catch (e) {
+							conn.pendingSubs.delete(id);
 							conn.topics.delete(topic);
 							this.send(conn, { t: "error", message: e instanceof Error ? e.message : String(e), code: "session_attach_failed" });
 						}

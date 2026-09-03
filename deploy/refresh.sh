@@ -29,12 +29,15 @@ if [[ -n "${DEPLOY_GIT_SSH_KEY_FILE:-}" && -f "${DEPLOY_GIT_SSH_KEY_FILE}" ]]; t
 fi
 
 phase pull
+# The harness build regenerates tracked files under packages/ (e.g. models.generated.ts).
+# We never hand-edit packages/, so discard such build artefacts before a fast-forward pull.
+git checkout -- packages/ 2>/dev/null || true
 before="$(git rev-parse HEAD)"
 log "at $(git rev-parse --short HEAD) on $(git rev-parse --abbrev-ref HEAD); fetching origin/${BRANCH}"
 git fetch --quiet origin "$BRANCH"
 after="$(git rev-parse "origin/${BRANCH}")"
-if [[ "$before" == "$after" ]]; then
-  log "already up to date at $(git rev-parse --short HEAD)"
+if [[ "$before" == "$after" ]] || git merge-base --is-ancestor "$after" "$before"; then
+  log "already up to date at $(git rev-parse --short HEAD) (origin/${BRANCH} is not ahead)"
   changed=""
 else
   changed="$(git diff --name-only "$before" "$after")"
@@ -57,6 +60,7 @@ if [[ "${REFRESH_FULL:-0}" == "1" || ! -f packages/coding-agent/dist/bundle/cli.
   lock_changed=true; harness_changed=true; observer_changed=true
 fi
 if [[ ! -d observer/dist/web ]]; then observer_changed=true; fi
+log "cwd=$(pwd) flags: lock=$lock_changed harness=$harness_changed observer=$observer_changed deploy=$deploy_changed bundle=$([[ -f packages/coding-agent/dist/bundle/cli.js ]] && echo present || echo missing)"
 
 phase install
 if $lock_changed; then

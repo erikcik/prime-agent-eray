@@ -161,6 +161,7 @@ function LiveTicker({ tree }: { tree: FleetTree | undefined }) {
 		return all.filter((n) => n.activeSessionId && (n.status === "running" || n.status === "needs_input" || n.status === "idle")).slice(0, MAX_HOT);
 	}, [tree]);
 
+	const hotKey = hot.map((n) => `${n.activeSessionId}|${n.name ?? n.sessionId}`).join(",");
 	useEffect(() => {
 		const offs = hot.map((n) =>
 			socket.subscribe(`session:${n.activeSessionId}`, (m: ServerMessage) => {
@@ -173,7 +174,8 @@ function LiveTicker({ tree }: { tree: FleetTree | undefined }) {
 		return () => {
 			for (const off of offs) off();
 		};
-	}, [hot]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [hotKey]);
 
 	return (
 		<aside className="ticker">

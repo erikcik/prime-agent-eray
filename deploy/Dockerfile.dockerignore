@@ -1,0 +1,17 @@
+# Build context excludes (BuildKit prefers <Dockerfile>.dockerignore). The image only needs the
+# source to warm caches and bake the kernel venv; runtime source comes from the volume checkout.
+.git
+**/node_modules
+**/dist
+**/.turbo
+**/*.log
+deploy/.env
+**/secrets.env
+**/.DS_Store
+observer/test/fixtures
+docs
+assets
+*.md
+!README.md
+!packages/**/*.md
+!prime-agent-runtime/**/*.md

@@ -1,0 +1,36 @@
+# Local rehearsal of the pod layout: a named volume plays the RunPod network volume at /workspace.
+#
+#   cp deploy/.env.example deploy/.env   # fill in tokens (never committed)
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up --build
+#   open http://127.0.0.1:8790  (token = PRIME_OBSERVER_TOKEN)
+#
+# First boot clones the repo onto the volume and builds (a few minutes); later boots are fast.
+services:
+  prime:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: prime-agent-eray:local
+    environment:
+      PRIME_OBSERVER_TOKEN: ${PRIME_OBSERVER_TOKEN:?set PRIME_OBSERVER_TOKEN in deploy/.env}
+      NANO_GPT_API_KEY: ${NANO_GPT_API_KEY:-}
+      ANTHROPIC_OAUTH_TOKEN: ${ANTHROPIC_OAUTH_TOKEN:-}
+      DEPLOY_GIT_SSH_KEY: ${DEPLOY_GIT_SSH_KEY:-}
+      DEPLOY_REPO_URL: ${DEPLOY_REPO_URL:-git@github.com:erikcik/prime-agent-eray.git}
+      DEPLOY_REPO_BRANCH: ${DEPLOY_REPO_BRANCH:-main}
+      PUBLIC_KEY: ${PUBLIC_KEY:-}
+      PRIME_OBSERVER_ALLOWED_ORIGINS: ${PRIME_OBSERVER_ALLOWED_ORIGINS:-http://127.0.0.1:8790,http://localhost:8790}
+    ports:
+      - "127.0.0.1:8790:8790"
+      - "127.0.0.1:2222:22"
+    volumes:
+      - workspace:/workspace
+    shm_size: 1gb
+    stop_grace_period: 30s
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL, NET_BIND_SERVICE, SYS_CHROOT, AUDIT_WRITE]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  workspace:
