@@ -7,10 +7,8 @@ def gql(query,variables=None):
         headers={"content-type":"application/json","user-agent":"Mozilla/5.0 prime-agent-eray-deploy"})
     try: return json.load(urllib.request.urlopen(req,timeout=90))
     except urllib.error.HTTPError as e: return {"http":e.code,"body":e.read().decode()[:1200]}
-if __name__=="__main__":
+if __name__=="__main__" and len(sys.argv)==1:
     print(json.dumps(gql('{ myself { id clientBalance } }'))[:200])
-    r=gql('mutation($input: DeployCpuPodInput!) { deployCpuPod(input: $input) { id } }',{"input":{}})
-    print(json.dumps(r)[:2000])
 
 # ---------------------------------------------------------------------------------------------
 # Usage:
