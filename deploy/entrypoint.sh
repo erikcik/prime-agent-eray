@@ -12,7 +12,7 @@
 #   app/          git checkout (git pull target for the observer's Refresh button)
 #   prime/agent/  PRIME_AGENT_CODING_AGENT_DIR (models.json, sessions, artifacts, logs; never auth.json)
 #   project/      the agents' working directory
-#   state/ssh/    sshd host keys; state/deploy_key: read-only GitHub deploy key
+#   state/ssh/    sshd host keys (the GitHub deploy key stays on container disk in ~/.ssh)
 #
 # Credentials come from pod ENV only (RunPod volumes ignore chmod): PRIME_OBSERVER_TOKEN,
 # NANO_GPT_API_KEY, ANTHROPIC_OAUTH_TOKEN, DEPLOY_GIT_SSH_KEY, PUBLIC_KEY (ssh authorized key).
@@ -84,12 +84,15 @@ mkdir -p "$AGENT_DIR" "$PROJECT_DIR" "$STATE_DIR"
 # Agents must never see the RunPod control-plane key (it can delete this pod and its volume).
 unset RUNPOD_API_KEY
 
-# Deploy key for the private repo, delivered via env, written under state/ (outside project/).
+# Deploy key for the private repo, delivered via env. It lives on CONTAINER disk (~/.ssh), never on the
+# volume: RunPod network volumes ignore chmod, so a key there reads back 0666 and ssh refuses it.
+rm -f "$STATE_DIR/deploy_key" 2>/dev/null || true
 if [[ -n "${DEPLOY_GIT_SSH_KEY:-}" ]]; then
-  printf '%s\n' "$DEPLOY_GIT_SSH_KEY" >"$STATE_DIR/deploy_key"
-  chmod 600 "$STATE_DIR/deploy_key" 2>/dev/null || true
-  export DEPLOY_GIT_SSH_KEY_FILE="$STATE_DIR/deploy_key"
-  export GIT_SSH_COMMAND="ssh -i $STATE_DIR/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+  mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+  printf '%s\n' "$DEPLOY_GIT_SSH_KEY" >"$HOME/.ssh/deploy_key"
+  chmod 600 "$HOME/.ssh/deploy_key"
+  export DEPLOY_GIT_SSH_KEY_FILE="$HOME/.ssh/deploy_key"
+  export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
   unset DEPLOY_GIT_SSH_KEY
 fi
 

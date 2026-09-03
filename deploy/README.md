@@ -11,7 +11,7 @@ pod (container, uid 1000)                     network volume  /workspace
 ├── prime-agent --mode daemon  (supervised)    ├── app/          git checkout (Refresh = git pull here)
 ├── observer  :8790            (supervised,    ├── prime/agent/  sessions, artifacts, models.json, logs
 │   exit 87 => restart)                        ├── project/      the agents' cwd
-└── sshd :22   (optional, key-only)            └── state/ssh/    host keys · state/deploy_key
+└── sshd :22   (optional, key-only)            └── state/ssh/    host keys (deploy key stays on container disk)
 ```
 
 * **Image** (`deploy/Dockerfile`): Node 22 + system deps + `uv`, a warmed npm cache and the Python
