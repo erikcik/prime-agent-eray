@@ -57,8 +57,8 @@ Never pass `volumeInGb` with `networkVolumeId`. Leave the start command empty (i
 |---|---|
 | network volume `prime-agent-eray-vol` (EU-RO-1, 50 GB) | `y0n17rf3mc` |
 | template `prime-agent-eray` (image + registry auth + env) | `mmv355evu2` |
-| pod `prime-agent-eray` (cpu3g-4-16, $0.16/h) | `26qbk1ihcmfsmh` → https://26qbk1ihcmfsmh-8790.proxy.runpod.net |
-| image | `ghcr.io/erikcik/prime-agent-eray:0.1.0` (= `latest`) |
+| pod `prime-agent-eray` (cpu3g-4-16, $0.16/h) | _(recreated after the deploy-key fix — see Results)_ |
+| image | `ghcr.io/erikcik/prime-agent-eray:0.1.1` (= `latest`) |
 
 **How the pod was actually created.** Neither the `runpod` MCP `create-pod` tool nor `runpodctl pod create`
 can pick a CPU instance size or (MCP) attach a network volume: both fall back to the smallest flavor and

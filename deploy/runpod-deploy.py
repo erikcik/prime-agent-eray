@@ -19,7 +19,7 @@ if __name__=="__main__":
 #   python3 deploy/runpod-deploy.py pod <podId>           # show status + port mappings
 # The env json is {"PRIME_OBSERVER_TOKEN": "...", "NANO_GPT_API_KEY": "...", ...} (never commit it).
 def deploy(env_path, instance="cpu3g-4-16", volume="y0n17rf3mc", template="mmv355evu2", dc="EU-RO-1",
-           image="ghcr.io/erikcik/prime-agent-eray:0.1.0", registry="cmtgfealr000h6h832efsrbit", name="prime-agent-eray"):
+           image="ghcr.io/erikcik/prime-agent-eray:0.1.1", registry="cmtgfealr000h6h832efsrbit", name="prime-agent-eray"):
     env=json.load(open(env_path))
     inp={"name":name,"instanceId":instance,"imageName":image,"templateId":template,"containerRegistryAuthId":registry,
          "cloudType":"SECURE","dataCenterId":dc,"networkVolumeId":volume,"volumeMountPath":"/workspace","containerDiskInGb":40,
