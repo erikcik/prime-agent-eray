@@ -55,9 +55,9 @@ with token; `json-assert --tool` PASS through the containerized daemon and the b
 | WebSocket through the RunPod proxy | subprotocol `prime-observer.v1` negotiated, origin accepted, `hello` + `fleet.snapshot` + `daemon.state` in < 0.5 s |
 | NanoGPT session on the pod | `pod-demo` built a package, tests passed, spawned `pod-reviewer` (nano) |
 | **Refresh while the agent worked** | pulled 1 incoming commit, skipped install/build, observer restarted in 25 s; agent + child kept running |
-| mirror `deploy/pod-mirror.sh --once` | `/workspace` (69 MB, excludes node_modules/.git) on the Mac in 19 s over `213.173.105.97:34446` |
+| mirror `deploy/pod-mirror.sh --once` | `/workspace` (69 MB, excludes node_modules/.git) on the Mac in 19 s; after the agent finished, REVIEW.md and the session JSONL appeared locally on the next pull |
 | terminate → new pod on same volume | done implicitly: pod 2 reused pod 1's `state/ssh` (identical fingerprint `SHA256:oDZi…`) |
-| stop → start | _see below_ |
+| stop → start | back in ~1 min (checkout + build reused); saved session + child listed, comms preserved; `resume` → new activeSessionId, prompt answered "RESUMED OK"; SSH port remapped 34446 → 31576, mirror reconnected on the new port |
 
 **Defect found and fixed:** the first pod (`26qbk1ihcmfsmh`) crash-looped: the deploy key written to
 `/workspace/state/deploy_key` read back as 0666 (RunPod volumes ignore chmod) and ssh refused it. The key
