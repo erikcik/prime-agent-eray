@@ -43,3 +43,6 @@ collect.sh
 
 __pycache__/
 *.pyc
+
+# local deployment secrets
+deploy/.env
