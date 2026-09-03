@@ -21,7 +21,7 @@ services:
       PUBLIC_KEY: ${PUBLIC_KEY:-}
       PRIME_OBSERVER_ALLOWED_ORIGINS: ${PRIME_OBSERVER_ALLOWED_ORIGINS:-http://127.0.0.1:8790,http://localhost:8790}
     ports:
-      - "127.0.0.1:8790:8790"
+      - "127.0.0.1:${COMPOSE_OBSERVER_PORT:-8791}:8790"
       - "127.0.0.1:2222:22"
     volumes:
       - workspace:/workspace

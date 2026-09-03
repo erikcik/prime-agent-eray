@@ -72,7 +72,7 @@ pod on the same volume). See `deploy/pod.md` for the exact create calls and stre
 tool calling, `supportsDeveloperRole:false`, cost 5/5 with cache reads at $0.5/M as reconciled
 against NanoGPT's usage endpoint). Key: `NANO_GPT_API_KEY` env (pod) or `auth.json` (Mac).
 
-Stress-test results (2026-09-03, Mac, via the daemon): smoke reply 8.5 s; ipython tool round trip
+NanoGPT accepts only `low|high|max` for `reasoning_effort` on this model (400 otherwise), so `thinkingLevelMap` maps off/minimal→low, medium→high, xhigh→max. Stress-test results (2026-09-03, Mac, via the daemon): smoke reply 8.5 s; ipython tool round trip
 7.5 s; 10 sequential tool calls 47 s, all correct; JSON-mode streaming with 39 text deltas and full
 usage/cost; RLM child on the nano model spawned, completed, usage attributed; 3 concurrent sessions
 and a 6-request burst all correct; ~200k-token attachment answered in 18.6 s; invalid key surfaces

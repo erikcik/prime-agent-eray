@@ -28,8 +28,13 @@
             "cacheWrite": 5
           },
           "thinkingLevelMap": {
-            "minimal": null,
-            "max": "xhigh"
+            "off": "low",
+            "minimal": "low",
+            "low": "low",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "max",
+            "max": "max"
           }
         }
       ]
