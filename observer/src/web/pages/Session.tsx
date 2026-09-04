@@ -6,7 +6,7 @@ import type { SessionDetail } from "../../shared/api.ts";
 import type { HarnessView } from "../../shared/harness.ts";
 import type { ServerMessage } from "../../shared/ws.ts";
 import { ConfirmDialog, Eyebrow, EmptyState, ErrorLine, Json, KV, MonoId, StatusPill, TimeAgo } from "../components/common.tsx";
-import { api, openAuthenticated } from "../lib/api.ts";
+import { ApiError, OBSERVER_RESTARTING, api, openAuthenticated } from "../lib/api.ts";
 import { clock, dateTime, modelShort, textOf, tokens, usd } from "../lib/format.ts";
 import { socket } from "../lib/ws.ts";
 import { fleetStore } from "../state/app-state.ts";
@@ -459,12 +459,31 @@ function Composer({ id, streaming, follow, setFollow }: { id: string; streaming:
 		if (!body) return;
 		setBusy(true);
 		setError(undefined);
-		try {
+		const deliver = async () => {
 			if (mode === "prompt") await api.prompt(id, body);
 			else if (mode === "steer") await api.steer(id, body);
 			else await api.followUp(id, body);
+		};
+		try {
+			// A Redeploy takes the observer down for ~30 s (exit 87, then its supervisor restarts
+			// it). Pressing Send in that window used to fail and leave a banner sitting there for
+			// good. Retry only on OBSERVER_RESTARTING: that code is set when the RunPod proxy
+			// served its own page, which means the port was not accepting and the observer never
+			// received the request — so re-sending a non-idempotent prompt cannot duplicate it.
+			for (let attempt = 0; ; attempt++) {
+				try {
+					await deliver();
+					break;
+				} catch (e) {
+					const retryable = e instanceof ApiError && e.code === OBSERVER_RESTARTING;
+					if (!retryable || attempt >= 5) throw e;
+					setError(new Error(`The observer is restarting — retrying (${attempt + 1}/5)…`));
+					await new Promise((r) => setTimeout(r, 4000));
+				}
+			}
 			setText("");
 			setAttachments([]);
+			setError(undefined);
 		} catch (e) {
 			setError(e);
 		} finally {

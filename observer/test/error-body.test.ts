@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { __testing } from "../src/web/lib/api.ts";
 
-const { describeErrorBody } = __testing;
+const { describeErrorBody, classifyErrorBody } = __testing;
 
 // Trimmed from a real response seen on pod 7vdq4vlyte1lpe.
 const RUNPOD_INTERSTITIAL = `<!DOCTYPE html><html><head><title>Waiting for service</title></head><body>
@@ -18,8 +18,10 @@ const RUNPOD_INTERSTITIAL = `<!DOCTYPE html><html><head><title>Waiting for servi
 
 describe("describeErrorBody", () => {
 	it("summarises the RunPod restart interstitial instead of echoing it", () => {
-		const msg = describeErrorBody(RUNPOD_INTERSTITIAL, 502, "Bad Gateway");
-		expect(msg).toBe("The observer is restarting — the RunPod proxy answered instead. Retry in a few seconds.");
+		const { message: msg, code } = classifyErrorBody(RUNPOD_INTERSTITIAL, 502, "Bad Gateway");
+		expect(msg).toBe("The observer is restarting — retrying…");
+		// The code is what lets the composer retry a non-idempotent prompt safely.
+		expect(code).toBe("observer_restarting");
 		expect(msg).not.toContain("<svg");
 		expect(msg).not.toContain("path d=");
 		expect(msg.length).toBeLessThan(200);
@@ -29,6 +31,7 @@ describe("describeErrorBody", () => {
 		const html = `<html><head><title>Gateway Timeout</title></head><body>${"x".repeat(5000)}</body></html>`;
 		const msg = describeErrorBody(html, 504, "Gateway Timeout");
 		expect(msg).toBe("Observer unreachable (504). It may be restarting; retry shortly.");
+		expect(classifyErrorBody(html, 504, "Gateway Timeout").code).toBe("observer_restarting");
 		expect(msg).not.toContain("xxxxx");
 	});
 
@@ -51,5 +54,11 @@ describe("describeErrorBody", () => {
 	it("truncates a huge non-HTML body rather than returning it", () => {
 		const msg = describeErrorBody("y".repeat(9000), 500, "Internal Server Error");
 		expect(msg.length).toBeLessThan(200);
+	});
+
+	it("does not mark a genuine app error as retryable", () => {
+		// A real JSON 409 must never be auto-retried; only proxy pages are safe to resend.
+		expect(classifyErrorBody("session is not live", 409, "Conflict").code).toBeUndefined();
+		expect(classifyErrorBody('<html><head><title>Not Found</title></head><body>x</body></html>', 404, "Not Found").code).toBeUndefined();
 	});
 });

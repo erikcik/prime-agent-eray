@@ -37,19 +37,30 @@ export function setUnauthorizedHandler(fn: () => void): void {
  * verbatim as the error message dumped the entire page into the composer banner. Anything that
  * is not JSON is therefore summarised, never echoed.
  */
-function describeErrorBody(text: string, status: number, statusText: string): string {
+/** Set when the RunPod proxy answered in the observer's place, so we know the request never landed. */
+export const OBSERVER_RESTARTING = "observer_restarting";
+
+function classifyErrorBody(text: string, status: number, statusText: string): { message: string; code?: string } {
 	const body = text.trim();
 	const looksLikeHtml = /^<(?:!doctype|html|head|body)\b/i.test(body) || /<\/html>\s*$/i.test(body);
 	if (looksLikeHtml || body.length > 400) {
 		// The proxy serves this while the observer is restarting (exit 87 after a Redeploy).
+		// This exact page means the port was not accepting, so the observer never saw the request —
+		// which is what makes an automatic retry safe for a non-idempotent call like prompt.
 		if (/waiting for service to respond|still initializing or not running/i.test(body)) {
-			return "The observer is restarting — the RunPod proxy answered instead. Retry in a few seconds.";
+			return { message: "The observer is restarting — retrying…", code: OBSERVER_RESTARTING };
 		}
-		if (status === 502 || status === 503 || status === 504) return `Observer unreachable (${status}). It may be restarting; retry shortly.`;
+		if (status === 502 || status === 503 || status === 504) {
+			return { message: `Observer unreachable (${status}). It may be restarting; retry shortly.`, code: OBSERVER_RESTARTING };
+		}
 		const title = /<title[^>]*>([^<]{1,120})<\/title>/i.exec(body)?.[1]?.trim();
-		return title ? `${status} ${statusText}: ${title}` : `${status} ${statusText} (non-JSON response)`;
+		return { message: title ? `${status} ${statusText}: ${title}` : `${status} ${statusText} (non-JSON response)` };
 	}
-	return body || statusText || `HTTP ${status}`;
+	return { message: body || statusText || `HTTP ${status}` };
+}
+
+function describeErrorBody(text: string, status: number, statusText: string): string {
+	return classifyErrorBody(text, status, statusText).message;
 }
 
 /** A file attached from the composer, stored in the session's `inbox/`. */
@@ -125,8 +136,10 @@ async function call<T>(method: string, path: string, body?: unknown, tokenOverri
 		const b = (parsed ?? {}) as Record<string, unknown>;
 		// Only trust `error` when the server really sent JSON; otherwise summarise (see describeErrorBody).
 		const fromJson = text.trimStart().startsWith("{") && typeof b.error === "string" ? b.error : undefined;
-		const message = fromJson && fromJson.length <= 400 ? fromJson : describeErrorBody(text, res.status, res.statusText);
-		throw new ApiError(res.status, message, typeof b.code === "string" ? b.code : undefined, b);
+		const classified = classifyErrorBody(text, res.status, res.statusText);
+		const message = fromJson && fromJson.length <= 400 ? fromJson : classified.message;
+		const code = (typeof b.code === "string" ? b.code : undefined) ?? (fromJson ? undefined : classified.code);
+		throw new ApiError(res.status, message, code, b);
 	}
 	return parsed as T;
 }
@@ -192,4 +205,4 @@ export async function openAuthenticated(path: string): Promise<void> {
 }
 
 /** Exported for tests only. */
-export const __testing = { describeErrorBody };
+export const __testing = { describeErrorBody, classifyErrorBody };
