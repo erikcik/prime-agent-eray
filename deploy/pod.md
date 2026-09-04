@@ -51,14 +51,69 @@ Never pass `volumeInGb` with `networkVolumeId`. Leave the start command empty (i
 | Refresh (packages/ commit) | hook warns about daemon restart; refuses while agents work unless forced |
 | mirror | `deploy/pod-mirror.sh --host <ip> --port <p> ~/Desktop/prime-agent-pod` shows `/workspace` locally |
 
-## Live ids (2026-09-03)
+## Deploy (current route)
+
+```bash
+envjson="$(deploy/env-json.sh)"          # renders deploy/.env -> 0600 json, prints key names only
+python3 deploy/runpod-deploy.py deploy "$envjson"
+rm -f "$envjson"                          # it holds every pod secret in clear text
+python3 deploy/runpod-deploy.py pod <podId>   # status + port mappings (22 -> public port)
+```
+`runpod-deploy.py` defaults to the live stack below; override any of them per-run with
+`RUNPOD_VOLUME`, `RUNPOD_TEMPLATE`, `RUNPOD_IMAGE`, `RUNPOD_INSTANCE`, `RUNPOD_DC`, `RUNPOD_NAME`.
+
+## Live ids (2026-09-03, second deployment)
 
 | thing | id |
 |---|---|
-| network volume `prime-agent-eray-vol` (EU-RO-1, 50 GB) | `y0n17rf3mc` |
-| template `prime-agent-eray` (image + registry auth + env) | `mmv355evu2` |
-| pod `prime-agent-eray` (cpu3g-4-16, $0.16/h) | `hzymwdbv6iy7nc` → https://hzymwdbv6iy7nc-8790.proxy.runpod.net (first pod `26qbk1ihcmfsmh` crash-looped: deploy key on the volume read back 0666; deleted) |
-| image | `ghcr.io/erikcik/prime-agent-eray:0.1.1` (= `latest`) |
+| network volume `prime-agent-eray-vol2` (EU-RO-1, 50 GB) | `o6kytzktj0` |
+| template | **none** — deployed templateless, so no pod secret is stored in a RunPod template |
+| pod `prime-agent-eray` (cpu3g-4-16, $0.16/h) | `7vdq4vlyte1lpe` → https://7vdq4vlyte1lpe-8790.proxy.runpod.net (4th pod on this volume; predecessors `dcmhshd4c18p5k`, `1l09kubkzyeo4t`, `4mczeltz3kgimr`) |
+| image | `ghcr.io/erikcik/prime-agent-eray:0.1.2` (= `latest`, digest `sha256:8010d870…`) |
+| mirror | `~/Desktop/prime-agent-pod2` (`--host 213.173.105.68 --port 49675`, remapped on every restart) |
+| ssh host key (volume 2) | `SHA256:E+u9r616JmLpjNRekspP0GRyLURwOGowYE3+vV+eH9Q` |
+
+`deployCpuPod` accepts the full spec without `templateId` (imageName + containerRegistryAuthId +
+ports + env + containerDiskInGb), which is preferable: a template would otherwise persist the
+observer token, the NanoGPT key, the deploy key and the Anthropic OAuth token in RunPod's account
+storage, and would pin a stale image tag.
+
+First boot on the empty volume: 178 s from container start to `observer listening`
+(clone 31 s, `npm ci` + harness build + observer build ~3 min). A **redeploy onto an existing volume
+is ~42 s** — `ensure_built` finds `node_modules` + both dist trees and skips the build, the settings
+seed skips (file present), and the daemon recovers its workers from the session files.
+
+**`stop` is not a reliable way to pause.** On 2026-09-04 a stopped pod refused to start with
+`There are not enough free vcpu on the host machine to start this pod` — while a pod is stopped its
+host can be filled by other tenants, and the pod is then stranded. Terminate + redeploy against the
+same `networkVolumeId` always works (71-82 s) and loses nothing, at the cost of a new pod id and URL.
+Treat the volume, not the pod, as the durable thing.
+
+**Changing a pod env var means replacing the pod.** RunPod cannot inject env into a running pod, and
+the observer's Redeploy button only runs `refresh.sh` (git pull + rebuild + observer restart) — it
+never touches env. Terminate and re-run the deploy against the same `networkVolumeId`: the checkout,
+sessions, settings and project files all persist. Stop the mirror first and restart it afterwards
+with the new 22/tcp mapping.
+
+`SERPER_API_KEY` powers the harness's bundled `websearch` skill (enabled by default via
+`bundledSkills.websearch`). The harness checks the env var **before** the `serper` credential in
+`auth.json`, so the key stays off the world-readable volume. Without it the skill still loads and the
+agent's search attempts simply fail — verified working on this pod (live Serper results returned).
+
+Image `0.1.2` over `0.1.1`: the entrypoint now seeds `settings.json` on a fresh volume
+(`anthropic/claude-opus-5` when an Anthropic token is present — otherwise the harness falls back to
+`prime-inference` and 402s), and *appends* the RunPod proxy origin to
+`PRIME_OBSERVER_ALLOWED_ORIGINS` instead of only setting it when empty (a leftover
+`127.0.0.1:8791` from the compose rehearsal used to shadow it and break the UI's WebSocket).
+
+### Superseded (first deployment — pod and volume deleted 2026-09-03 after the second was verified)
+
+| thing | id | state |
+|---|---|---|
+| network volume `prime-agent-eray-vol` | `y0n17rf3mc` | deleted (content had been mirrored to `~/Desktop/prime-agent-pod`) |
+| pod `prime-agent-eray` | `hzymwdbv6iy7nc` | deleted (first pod `26qbk1ihcmfsmh` crash-looped: deploy key on the volume read back 0666) |
+| template `prime-agent-eray` | `mmv355evu2` | **still exists** — pins image 0.1.1 and stores the old observer token, NanoGPT key and deploy key. Delete it, or treat those as live secrets. |
+| image | `ghcr.io/erikcik/prime-agent-eray:0.1.1` | still in GHCR |
 
 **How the pod was actually created.** Neither the `runpod` MCP `create-pod` tool nor `runpodctl pod create`
 can pick a CPU instance size or (MCP) attach a network volume: both fall back to the smallest flavor and

@@ -19,12 +19,29 @@ pod (container, uid 1000)                     network volume  /workspace
   `chmod`, which breaks venvs). The repo source is **not** baked in.
 * **First boot** (`deploy/entrypoint.sh serve`): clones `erikcik/prime-agent-eray` onto the volume
   with the read-only deploy key, runs `npm ci && npm run build` and the observer build, installs
-  `deploy/models.json` if the agent dir has none, then supervises the daemon and the observer.
+  `deploy/models.json` if the agent dir has none, seeds a default model into `settings.json`
+  (see below), then supervises the daemon and the observer.
+* **Default model on a fresh volume**: with no `settings.json` the harness falls back to
+  `prime-inference`, which 402s on an empty Prime balance. The entrypoint therefore seeds one on
+  first boot: `anthropic/claude-opus-5` when `ANTHROPIC_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) is
+  set, else `nano-gpt` when `NANO_GPT_API_KEY` is. Override without rebuilding the image via the
+  `DEPLOY_DEFAULT_PROVIDER` / `DEPLOY_DEFAULT_MODEL` pod env vars. Existing volumes are never
+  touched — the seed only runs when `settings.json` is absent.
+* **Claude via subscription OAuth**: set `ANTHROPIC_OAUTH_TOKEN=sk-ant-oat01-…` (from
+  `claude setup-token`) as a pod env var. `packages/ai` prefers it over `ANTHROPIC_API_KEY`, and
+  the Anthropic provider detects the `sk-ant-oat` prefix and switches to bearer auth with the
+  `oauth-2025-04-20` beta headers. Never put it in `auth.json` on the volume (world-readable).
 * **Refresh button** (`deploy/refresh.sh`): `git pull --ff-only`, installs/builds only what changed,
   then the observer exits 87 and is restarted by `run-observer.sh`. Running agents are only
   interrupted when `packages/**` changed (and even then the hook refuses while agents are
   working unless `REFRESH_FORCE=1`).
 * **Secrets** come from pod env vars only (see `.env.example`). Never write `auth.json` on the volume.
+  `deploy/env-json.sh` renders `deploy/.env` into the 0600 JSON payload `runpod-deploy.py` expects,
+  printing only key names and lengths — delete the file after the deploy.
+* **Observer origins**: on RunPod the entrypoint *appends* `https://$RUNPOD_POD_ID-8790.proxy.runpod.net`
+  to `PRIME_OBSERVER_ALLOWED_ORIGINS` (idempotently) rather than only setting it when empty — a
+  value left over from the local compose rehearsal (`127.0.0.1:8791`) would otherwise shadow the
+  proxy origin and the UI's WebSocket would be rejected.
 * **Mirror** (`deploy/pod-mirror.sh`): rsync-over-ssh pull loop of `/workspace` into
   `~/Desktop/prime-agent-pod` on the Mac. SSH port is remapped by RunPod on every restart.
 

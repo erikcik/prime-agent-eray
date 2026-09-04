@@ -31,6 +31,8 @@ RUN_USER=node
 
 log() { echo "[entrypoint] $*"; }
 warn() { echo "[entrypoint] WARNING: $*" >&2; }
+# Minimal JSON string literal (escapes \ and ") for the settings seed below.
+json_str() { local s="${1//\\/\\\\}"; printf '"%s"' "${s//\"/\\\"}"; }
 
 cmd="${1:-serve}"
 
@@ -97,8 +99,13 @@ if [[ -n "${DEPLOY_GIT_SSH_KEY:-}" ]]; then
 fi
 
 # Observer origins behind the RunPod proxy (it rewrites Host, so the page origin must be allow-listed).
-if [[ -n "${RUNPOD_POD_ID:-}" && -z "${PRIME_OBSERVER_ALLOWED_ORIGINS:-}" ]]; then
-  export PRIME_OBSERVER_ALLOWED_ORIGINS="https://${RUNPOD_POD_ID}-${OBSERVER_PORT}.proxy.runpod.net"
+# Append rather than only-set-if-empty: a stray PRIME_OBSERVER_ALLOWED_ORIGINS carried over from the
+# local compose rehearsal (127.0.0.1:8791) would otherwise shadow the proxy origin and break the UI's WS.
+if [[ -n "${RUNPOD_POD_ID:-}" ]]; then
+  proxy_origin="https://${RUNPOD_POD_ID}-${OBSERVER_PORT}.proxy.runpod.net"
+  if [[ ",${PRIME_OBSERVER_ALLOWED_ORIGINS:-}," != *",${proxy_origin},"* ]]; then
+    export PRIME_OBSERVER_ALLOWED_ORIGINS="${PRIME_OBSERVER_ALLOWED_ORIGINS:+${PRIME_OBSERVER_ALLOWED_ORIGINS},}${proxy_origin}"
+  fi
 fi
 
 ensure_checkout() {
@@ -125,6 +132,24 @@ ensure_built() {
   if [[ ! -f "$AGENT_DIR/models.json" && -f deploy/models.json ]]; then
     cp deploy/models.json "$AGENT_DIR/models.json"
     log "installed deploy/models.json -> $AGENT_DIR/models.json"
+  fi
+  # A default model for a fresh volume, if the agent has no settings yet. Without this the harness
+  # falls back to prime-inference, which 402s on an empty Prime balance. Override per-pod with
+  # DEPLOY_DEFAULT_PROVIDER / DEPLOY_DEFAULT_MODEL (no image rebuild needed).
+  if [[ ! -f "$AGENT_DIR/settings.json" ]]; then
+    local prov="${DEPLOY_DEFAULT_PROVIDER:-}" model="${DEPLOY_DEFAULT_MODEL:-}"
+    if [[ -z "$prov" ]]; then
+      if [[ -n "${ANTHROPIC_OAUTH_TOKEN:-}${ANTHROPIC_API_KEY:-}" ]]; then
+        prov=anthropic; model="${model:-claude-opus-5}"
+      elif [[ -n "${NANO_GPT_API_KEY:-}" ]]; then
+        prov=nano-gpt; model="${model:-abliteration-ai/abliterated-model-large-v2}"
+      fi
+    fi
+    if [[ -n "$prov" && -n "$model" ]]; then
+      printf '{\n  "defaultProvider": %s,\n  "defaultModel": %s\n}\n' \
+        "$(json_str "$prov")" "$(json_str "$model")" >"$AGENT_DIR/settings.json"
+      log "seeded $AGENT_DIR/settings.json -> $prov/$model"
+    fi
   fi
   # Make `prime-agent` resolvable for scripts and the observer's daemon start.
   mkdir -p "$HOME/.local/bin"

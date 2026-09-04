@@ -46,3 +46,4 @@ __pycache__/
 
 # local deployment secrets
 deploy/.env
+deploy/.pod-snapshot.json
