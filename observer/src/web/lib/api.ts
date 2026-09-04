@@ -29,6 +29,50 @@ export function setUnauthorizedHandler(fn: () => void): void {
 	onUnauthorized = fn;
 }
 
+/** A file attached from the composer, stored in the session's `inbox/`. */
+export interface UploadedFile {
+	name: string;
+	/** cwd-relative, e.g. `inbox/brief.pdf` — what the prompt announces to the agent. */
+	path: string;
+	absolute: string;
+	bytes: number;
+	modified_at: string;
+}
+
+/**
+ * Upload one asset as a RAW body with the name in a header — never multipart, and never
+ * through call(), which would JSON-stringify a File into "{}". The server streams this
+ * straight to disk (see server/http/uploads.ts). No client-side timeout: a large file on a
+ * slow uplink must be allowed to take as long as it takes, and the server bounds size, not time.
+ */
+export async function uploadFile(file: File, session?: string, signal?: AbortSignal): Promise<UploadedFile> {
+	const token = getToken();
+	const headers: Record<string, string> = {
+		"content-type": "application/octet-stream",
+		// encodeURIComponent so non-ASCII names survive a header that must be latin-1.
+		"x-file-name": encodeURIComponent(file.name),
+	};
+	if (token) headers.authorization = `Bearer ${token}`;
+	const query = session ? `?session=${encodeURIComponent(session)}` : "";
+	const res = await fetch(`/api/uploads${query}`, { method: "POST", headers, body: file, signal });
+	if (res.status === 401) {
+		clearToken();
+		onUnauthorized?.();
+		throw new ApiError(401, "unauthorized", "unauthorized");
+	}
+	const text = await res.text();
+	let parsed: Record<string, unknown> = {};
+	if (text) {
+		try {
+			parsed = JSON.parse(text) as Record<string, unknown>;
+		} catch {
+			parsed = { error: text };
+		}
+	}
+	if (!res.ok) throw new ApiError(res.status, String(parsed.error ?? res.statusText), typeof parsed.code === "string" ? parsed.code : undefined, parsed);
+	return parsed.file as UploadedFile;
+}
+
 async function call<T>(method: string, path: string, body?: unknown, tokenOverride?: string): Promise<T> {
 	const token = tokenOverride ?? getToken();
 	const headers: Record<string, string> = {};
@@ -98,6 +142,9 @@ export const api = {
 	daemonLog: (lines = 200) => call<{ path: string; lines: string[] }>("GET", `/api/daemon/log?lines=${lines}`),
 	deploy: () => call<{ runId: string }>("POST", "/api/deploy"),
 	deployLast: () => call<DeployRun | null>("GET", "/api/deploy/last"),
+	uploads: (session?: string) => call<{ cwd: string; inbox: string; files: UploadedFile[] }>("GET", `/api/uploads${session ? `?session=${enc(session)}` : ""}`),
+	// Raw-body upload; deliberately not routed through call(). See uploadFile above.
+	uploadFile,
 };
 
 function enc(s: string): string {

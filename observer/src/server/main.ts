@@ -145,6 +145,15 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		}
 		serveStatic(env.webDist, req, res);
 	});
+	// Node caps a whole request at `requestTimeout` (300 s by default) and the header phase at
+	// `headersTimeout` (60 s). An attachment pushed over a slow uplink routinely takes longer than
+	// five minutes, and the socket is then torn down mid-body: the browser reports a network error
+	// with no status, so it reads as "uploads time out" rather than as a server limit. Uploads
+	// stream to disk and are byte-capped in uploads.ts, so time is the wrong axis to police here.
+	server.requestTimeout = 0; // no ceiling on body duration; size is bounded instead
+	server.headersTimeout = 60_000; // still bound the header phase (slowloris)
+	server.keepAliveTimeout = 72_000;
+
 	server.on("upgrade", (req, socket, head) => {
 		if ((req.url ?? "").split("?")[0] !== "/ws") {
 			socket.destroy();

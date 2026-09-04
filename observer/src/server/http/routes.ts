@@ -28,6 +28,7 @@ import type { HtmlExporter } from "../export/html-export.ts";
 import type { FleetService } from "../fleet/fleet-service.ts";
 import type { Hub } from "../ws/hub.ts";
 import { HttpError, type Router } from "./router.ts";
+import { UPLOAD_INBOX_DIR, listInbox, receiveUpload } from "./uploads.ts";
 
 export interface RouteDeps {
 	env: ObserverEnv;
@@ -384,6 +385,35 @@ export function registerRoutes(r: Router, d: RouteDeps): void {
 		const result = await d.commands.refine(body.activeSessionId, { instructions: body.instructions, global: body.global });
 		d.hub.publish("harness", { t: "harness.changed", scope: body.global ? "global" : "local" });
 		return { ok: true, result };
+	});
+
+	// ---- asset uploads ---------------------------------------------------------------
+	// Files land in `<session cwd>/inbox/` and the composer announces them by relative path.
+	// `receiveUpload` streams the raw body to disk; it never touches ctx.body(), whose 4 MB
+	// in-memory cap is meant for control JSON. See uploads.ts for why that matters.
+	const uploadCwd = (ctx: { query: URLSearchParams }): string => {
+		const session = ctx.query.get("session");
+		if (session) {
+			const node = d.fleet.findNode(session);
+			if (node?.cwd && existsSync(node.cwd)) return node.cwd;
+		}
+		const cwd = ctx.query.get("cwd");
+		if (cwd && existsSync(cwd)) return cwd;
+		return d.env.repoRoot;
+	};
+
+	r.get("/api/uploads", (ctx) => ({ cwd: uploadCwd(ctx), inbox: UPLOAD_INBOX_DIR, files: listInbox(uploadCwd(ctx)) }));
+
+	r.post("/api/uploads", async (ctx) => {
+		const cwd = uploadCwd(ctx);
+		const header = ctx.req.headers["x-file-name"];
+		const file = await receiveUpload(ctx.req, {
+			cwd,
+			fileName: Array.isArray(header) ? header[0] : header,
+			maxBytes: d.env.maxUploadBytes,
+		});
+		d.hub.publish("uploads", { t: "uploads.changed", cwd });
+		return { ok: true, file };
 	});
 
 	r.get("/api/skills", (ctx) => {

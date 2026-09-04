@@ -408,21 +408,63 @@ function md(text: string): string {
 	return DOMPurify.sanitize(marked.parse(text, { async: false }) as string);
 }
 
+type Attachment = { id: string; name: string; bytes: number; status: "uploading" | "done" | "error"; path?: string; error?: string };
+
+function formatBytesShort(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+	if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/**
+ * The model only ever sees the message text, so an uploaded file has to be announced there by
+ * path — same contract as ai-ceo-1's `taskWithAttachments`.
+ */
+export function messageWithAttachments(text: string, attachments: Attachment[]): string {
+	const done = attachments.filter((a) => a.status === "done" && a.path);
+	if (!done.length) return text;
+	const lines = done.map((a) => `- ${a.path} (${formatBytesShort(a.bytes)})`);
+	return `${text}\n\nAttached files (already uploaded to this session's \`inbox/\` folder; open them with these cwd-relative paths):\n${lines.join("\n")}`;
+}
+
 function Composer({ id, streaming, follow, setFollow }: { id: string; streaming: boolean; follow: boolean; setFollow: (v: boolean) => void }) {
 	const [mode, setMode] = useState<"prompt" | "steer" | "followUp">("prompt");
 	const [text, setText] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<unknown>();
+	const [attachments, setAttachments] = useState<Attachment[]>([]);
+	const fileInput = useRef<HTMLInputElement>(null);
+	const uploading = attachments.some((a) => a.status === "uploading");
+
+	async function attachFiles(list: FileList | null) {
+		if (!list?.length) return;
+		// Sequential, not Promise.all: parallel large uploads starve each other on one uplink
+		// and make every row look stalled at once.
+		for (const file of Array.from(list)) {
+			const localId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+			setAttachments((cur) => [...cur, { id: localId, name: file.name, bytes: file.size, status: "uploading" }]);
+			try {
+				const stored = await api.uploadFile(file, id);
+				setAttachments((cur) => cur.map((a) => (a.id === localId ? { ...a, status: "done", path: stored.path, name: stored.name, bytes: stored.bytes } : a)));
+			} catch (e) {
+				const msg = e instanceof Error ? e.message : String(e);
+				setAttachments((cur) => cur.map((a) => (a.id === localId ? { ...a, status: "error", error: msg.slice(0, 120) } : a)));
+			}
+		}
+	}
 
 	async function send() {
-		if (!text.trim()) return;
+		const body = messageWithAttachments(text.trim(), attachments);
+		if (!body) return;
 		setBusy(true);
 		setError(undefined);
 		try {
-			if (mode === "prompt") await api.prompt(id, text);
-			else if (mode === "steer") await api.steer(id, text);
-			else await api.followUp(id, text);
+			if (mode === "prompt") await api.prompt(id, body);
+			else if (mode === "steer") await api.steer(id, body);
+			else await api.followUp(id, body);
 			setText("");
+			setAttachments([]);
 		} catch (e) {
 			setError(e);
 		} finally {
@@ -455,10 +497,45 @@ function Composer({ id, streaming, follow, setFollow }: { id: string; streaming:
 						if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void send();
 					}}
 				/>
-				<button type="button" className="btn btn--primary" disabled={busy || !text.trim()} onClick={() => void send()}>
-					Send
+				<button type="button" className="btn btn--primary" disabled={busy || uploading || (!text.trim() && !attachments.some((a) => a.status === "done"))} onClick={() => void send()}>
+					{uploading ? "Uploading…" : "Send"}
 				</button>
 			</div>
+			<div className="attach-row">
+				<button type="button" className="btn btn--small attach-button" disabled={busy} onClick={() => fileInput.current?.click()}>
+					Attach files
+				</button>
+				<input
+					ref={fileInput}
+					type="file"
+					multiple
+					hidden
+					onChange={(e) => {
+						void attachFiles(e.target.files);
+						// Reset so re-picking the same file fires change again.
+						e.target.value = "";
+					}}
+				/>
+				<span className="tiny muted">Uploaded to this session's inbox/ and listed in the message by path.</span>
+			</div>
+			{attachments.length > 0 && (
+				<ul className="attach-list">
+					{attachments.map((a) => (
+						<li key={a.id} className={`attach-item attach-${a.status}`}>
+							<span className="attach-name" title={a.name}>
+								{a.path ?? a.name}
+							</span>
+							<span className="attach-meta">
+								{formatBytesShort(a.bytes)}
+								{a.status === "uploading" ? " · uploading…" : a.status === "error" ? ` · ${a.error}` : ""}
+							</span>
+							<button type="button" className="attach-remove" aria-label={`Remove ${a.name}`} onClick={() => setAttachments((cur) => cur.filter((x) => x.id !== a.id))}>
+								×
+							</button>
+						</li>
+					))}
+				</ul>
+			)}
 			<div className="tiny muted">⌘/Ctrl+Enter to send.</div>
 		</div>
 	);

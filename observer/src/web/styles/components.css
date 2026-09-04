@@ -680,3 +680,82 @@
 	gap: 6px;
 	flex-wrap: wrap;
 }
+
+/* ---- composer attachments -------------------------------------------------
+   Uploaded assets for the current session. Rows carry their own state so a slow
+   or failed upload is legible without blocking the rest of the composer. */
+.attach-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+	flex-wrap: wrap;
+}
+
+.attach-button {
+	white-space: nowrap;
+}
+
+.attach-list {
+	list-style: none;
+	margin: 8px 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.attach-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border: var(--hair);
+	border-radius: var(--r-small);
+	background: var(--faint);
+	font-size: 12px;
+}
+
+.attach-name {
+	font-family: var(--mono);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.attach-meta {
+	color: var(--mute);
+	white-space: nowrap;
+	flex: 0 0 auto;
+}
+
+.attach-item.attach-uploading {
+	border-color: var(--tint-border);
+	background: var(--tint);
+}
+
+.attach-item.attach-error {
+	border-color: var(--accent);
+	color: var(--accent-deep);
+}
+
+.attach-item.attach-error .attach-meta {
+	color: var(--accent-deep);
+}
+
+.attach-remove {
+	border: 0;
+	background: none;
+	cursor: pointer;
+	color: var(--mute);
+	font-size: 15px;
+	line-height: 1;
+	padding: 0 2px;
+	flex: 0 0 auto;
+}
+
+.attach-remove:hover {
+	color: var(--ink);
+}

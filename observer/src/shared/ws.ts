@@ -11,6 +11,7 @@ export type Topic =
 	| "schedules"
 	| "comms"
 	| "deploy"
+	| "uploads"
 	| `session:${string}`;
 
 export type ClientMessage =
@@ -35,6 +36,7 @@ export type ServerMessage =
 	| { t: "session.remapped"; sessionId: string; activeSessionId: string }
 	| { t: "session.resync_required"; activeSessionId: string }
 	| { t: "harness.changed"; scope: "global" | "local"; sessionId?: string }
+	| { t: "uploads.changed"; cwd: string }
 	| { t: "schedules.changed" }
 	| { t: "comms.message"; record: AgentMessageRecord }
 	| { t: "comms.status"; status: AgentMessagesStatus }

@@ -18,6 +18,16 @@ export interface ObserverEnv {
 	webDist: string;
 	dataDir: string;
 	isDev: boolean;
+	/** Cap for one composer attachment. Through the RunPod proxy Cloudflare rejects >~100 MB first. */
+	maxUploadBytes: number;
+}
+
+/** Attachment cap; env override must be a positive integer or we keep the default. */
+export const DEFAULT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+	const n = Number.parseInt((value ?? "").trim(), 10);
+	return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function parseList(value: string | undefined): string[] {
@@ -74,5 +84,6 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): ObserverEnv {
 		webDist: existsSync(webDist) ? webDist : webDist,
 		dataDir: resolve(agentDir, "observer"),
 		isDev: env.NODE_ENV === "development",
+		maxUploadBytes: parsePositiveInt(env.PRIME_OBSERVER_MAX_UPLOAD_BYTES, DEFAULT_MAX_UPLOAD_BYTES),
 	};
 }
