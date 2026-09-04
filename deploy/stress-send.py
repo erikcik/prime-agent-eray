@@ -53,6 +53,26 @@ def req(url, tok, method="GET", body=None, timeout=90):
         return 0, {"error": str(e)}
 
 
+def trigger_deploy(url, tok, timeout=240):
+    """POST /api/deploy, tolerating the observer being mid-restart from an earlier phase.
+
+    refresh.sh exits 87 at the END of its run, so /api/health can answer 200 microseconds before
+    the process goes away -- checking health first is not enough, the POST itself must retry."""
+    wait_for_idle_deploy(url, tok, timeout)
+    t0 = time.time()
+    last = None
+    while time.time() - t0 < timeout:
+        code, body = req(f"{url}/api/deploy", tok, "POST", {}, timeout=30)
+        last = code
+        if code in (200, 202):
+            return code
+        if code == 409:              # one is already running: that is what we wanted anyway
+            wait_for_idle_deploy(url, tok, timeout)
+            return 200
+        time.sleep(4)
+    return last
+
+
 def wait_for_idle_deploy(url, tok, timeout=240):
     """/api/deploy 409s while one is already running, so phases must not stack them."""
     t0 = time.time()
@@ -131,8 +151,7 @@ def phase_redeploy(url, tok, rep, sid):
     if not sid:
         print("  SKIP  no session from the live phase")
         return
-    wait_for_idle_deploy(url, tok)
-    code, _ = req(f"{url}/api/deploy", tok, "POST", {})
+    code = trigger_deploy(url, tok)
     rep.check("redeploy accepted", code in (200, 202), f"http {code}")
     seen, delivered, t0 = {}, False, time.time()
     while time.time() - t0 < 180:
@@ -173,8 +192,7 @@ def phase_recover(url, tok, rep, sid):
                 n += 1
         return n
 
-    wait_for_idle_deploy(url, tok)
-    code, _ = req(f"{url}/api/deploy", tok, "POST", {})
+    code = trigger_deploy(url, tok)
     rep.check("redeploy accepted", code in (200, 202), f"http {code}")
     time.sleep(2)  # let the observer actually go down before we start sending
 
@@ -203,8 +221,16 @@ def phase_recover(url, tok, rep, sid):
         break
 
     rep.check("message got through the redeploy", outcome is not None, f"after {attempts} attempts, {int(time.time()-t0)}s")
-    time.sleep(5)
-    count = landed()
+
+    # The transcript is not readable the instant a send is accepted: the daemon may still be
+    # restarting, and /messages reads what has been persisted. Poll rather than assert early --
+    # an earlier version of this check reported 0 copies for a message that was on disk.
+    count, t1 = 0, time.time()
+    while time.time() - t1 < 120:
+        count = landed()
+        if count >= 1:
+            break
+        time.sleep(5)
     rep.check("delivered EXACTLY once (no duplicate)", count == 1, f"found {count} copies of the marker")
 
 
