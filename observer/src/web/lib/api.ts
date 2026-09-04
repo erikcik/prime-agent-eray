@@ -29,6 +29,29 @@ export function setUnauthorizedHandler(fn: () => void): void {
 	onUnauthorized = fn;
 }
 
+/**
+ * Turn a non-JSON error body into something worth showing.
+ *
+ * Behind the RunPod proxy an unavailable observer does not answer at all — the proxy does, with
+ * its own "Waiting for service to respond" HTML page (inline SVG logo included). Using that body
+ * verbatim as the error message dumped the entire page into the composer banner. Anything that
+ * is not JSON is therefore summarised, never echoed.
+ */
+function describeErrorBody(text: string, status: number, statusText: string): string {
+	const body = text.trim();
+	const looksLikeHtml = /^<(?:!doctype|html|head|body)\b/i.test(body) || /<\/html>\s*$/i.test(body);
+	if (looksLikeHtml || body.length > 400) {
+		// The proxy serves this while the observer is restarting (exit 87 after a Redeploy).
+		if (/waiting for service to respond|still initializing or not running/i.test(body)) {
+			return "The observer is restarting — the RunPod proxy answered instead. Retry in a few seconds.";
+		}
+		if (status === 502 || status === 503 || status === 504) return `Observer unreachable (${status}). It may be restarting; retry shortly.`;
+		const title = /<title[^>]*>([^<]{1,120})<\/title>/i.exec(body)?.[1]?.trim();
+		return title ? `${status} ${statusText}: ${title}` : `${status} ${statusText} (non-JSON response)`;
+	}
+	return body || statusText || `HTTP ${status}`;
+}
+
 /** A file attached from the composer, stored in the session's `inbox/`. */
 export interface UploadedFile {
 	name: string;
@@ -69,7 +92,10 @@ export async function uploadFile(file: File, session?: string, signal?: AbortSig
 			parsed = { error: text };
 		}
 	}
-	if (!res.ok) throw new ApiError(res.status, String(parsed.error ?? res.statusText), typeof parsed.code === "string" ? parsed.code : undefined, parsed);
+	if (!res.ok) {
+		const message = typeof parsed.error === "string" && parsed.error.length <= 400 && text.trimStart().startsWith("{") ? parsed.error : describeErrorBody(text, res.status, res.statusText);
+		throw new ApiError(res.status, message, typeof parsed.code === "string" ? parsed.code : undefined, parsed);
+	}
 	return parsed.file as UploadedFile;
 }
 
@@ -97,7 +123,10 @@ async function call<T>(method: string, path: string, body?: unknown, tokenOverri
 	}
 	if (!res.ok) {
 		const b = (parsed ?? {}) as Record<string, unknown>;
-		throw new ApiError(res.status, String(b.error ?? res.statusText), typeof b.code === "string" ? b.code : undefined, b);
+		// Only trust `error` when the server really sent JSON; otherwise summarise (see describeErrorBody).
+		const fromJson = text.trimStart().startsWith("{") && typeof b.error === "string" ? b.error : undefined;
+		const message = fromJson && fromJson.length <= 400 ? fromJson : describeErrorBody(text, res.status, res.statusText);
+		throw new ApiError(res.status, message, typeof b.code === "string" ? b.code : undefined, b);
 	}
 	return parsed as T;
 }
@@ -161,3 +190,6 @@ export async function openAuthenticated(path: string): Promise<void> {
 	window.open(url, "_blank", "noopener");
 	setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
+
+/** Exported for tests only. */
+export const __testing = { describeErrorBody };

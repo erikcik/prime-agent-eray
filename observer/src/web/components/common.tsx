@@ -103,10 +103,20 @@ export function ConfirmDialog({ title, body, confirmLabel = "Confirm", danger, o
 	);
 }
 
+/** Longest error we will render inline. Anything past this is a payload, not a message. */
+const ERROR_DISPLAY_LIMIT = 400;
+
 export function ErrorLine({ error }: { error: unknown }) {
 	if (!error) return null;
-	const msg = error instanceof Error ? error.message : String(error);
-	return <div className="banner">{msg}</div>;
+	const raw = error instanceof Error ? error.message : String(error);
+	// Defence in depth: api.ts already summarises non-JSON bodies, but a stray HTML page from
+	// anywhere else must never be able to paint itself across the whole view.
+	const msg = raw.length > ERROR_DISPLAY_LIMIT ? `${raw.slice(0, ERROR_DISPLAY_LIMIT)}…` : raw;
+	return (
+		<div className="banner" title={raw.length > ERROR_DISPLAY_LIMIT ? raw.slice(0, 2000) : undefined}>
+			{msg}
+		</div>
+	);
 }
 
 export function KV({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) {
