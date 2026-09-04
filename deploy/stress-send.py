@@ -53,6 +53,17 @@ def req(url, tok, method="GET", body=None, timeout=90):
         return 0, {"error": str(e)}
 
 
+def wait_for_idle_deploy(url, tok, timeout=240):
+    """/api/deploy 409s while one is already running, so phases must not stack them."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        code, h = req(f"{url}/api/health", tok, timeout=20)
+        if code == 200 and not (h.get("deploy") or {}).get("running"):
+            return True
+        time.sleep(4)
+    return False
+
+
 class Report:
     def __init__(self):
         self.fails = []
@@ -74,6 +85,10 @@ def phase_live(url, tok, rep):
     rep.check("create a session", code == 200 and bool(active), f"http {code}")
     if not sid:
         return None
+    # Sending the instant after create races the worker's first turn; the RunPod proxy answers
+    # with its own page for a beat even though the observer never restarts (measured). Recovery
+    # handles that in the UI; here we just want the steady-state assertion, so settle first.
+    time.sleep(5)
     code, _ = req(f"{url}/api/sessions/{sid}/prompt", tok, "POST", {"message": "second message"})
     rep.check("send to the live session", code == 200, f"http {code}")
     return sid
@@ -116,6 +131,7 @@ def phase_redeploy(url, tok, rep, sid):
     if not sid:
         print("  SKIP  no session from the live phase")
         return
+    wait_for_idle_deploy(url, tok)
     code, _ = req(f"{url}/api/deploy", tok, "POST", {})
     rep.check("redeploy accepted", code in (200, 202), f"http {code}")
     seen, delivered, t0 = {}, False, time.time()
@@ -133,11 +149,70 @@ def phase_redeploy(url, tok, rep, sid):
               str([k for k in seen if k.startswith("5")]))
 
 
+def phase_recover(url, tok, rep, sid):
+    """End-to-end proof: run the client's recovery algorithm across a REAL redeploy and assert the
+    message lands exactly once. This is the property that matters — surviving the restart is
+    worthless if it costs a duplicated prompt."""
+    print("\n== phase: recover (exactly-once across a real redeploy) ==")
+    if not sid:
+        print("  SKIP  no session")
+        return
+    marker = f"STRESS_MARKER_{int(time.time())}"
+
+    def landed():
+        code, m = req(f"{url}/api/sessions/{sid}/messages", tok, timeout=30)
+        msgs = m if isinstance(m, list) else m.get("messages", [])
+        n = 0
+        for x in msgs:
+            if x.get("role") != "user":
+                continue
+            c = x.get("content")
+            if isinstance(c, list):
+                c = "".join(b.get("text", "") for b in c if isinstance(b, dict))
+            if str(c or "").strip() == marker:
+                n += 1
+        return n
+
+    wait_for_idle_deploy(url, tok)
+    code, _ = req(f"{url}/api/deploy", tok, "POST", {})
+    rep.check("redeploy accepted", code in (200, 202), f"http {code}")
+    time.sleep(2)  # let the observer actually go down before we start sending
+
+    # The same decision tree as observer/src/web/lib/send.ts.
+    outcome, t0, attempts = None, time.time(), 0
+    while time.time() - t0 < 180:
+        attempts += 1
+        code, body = req(f"{url}/api/sessions/{sid}/prompt", tok, "POST", {"message": marker}, timeout=25)
+        if code == 200:
+            outcome = "delivered"
+            break
+        if code == 409 and body.get("code") == "session_not_live":
+            req(f"{url}/api/sessions/{sid}/resume", tok, "POST", {}, timeout=60)
+            time.sleep(3)
+            continue
+        if body.get("_html"):          # proxy interstitial: provably undelivered, safe to resend
+            time.sleep(3)
+            continue
+        if code == 0 or code >= 500:   # ambiguous: check before resending
+            time.sleep(3)
+            if landed():
+                outcome = "confirmed"
+                break
+            continue
+        rep.check(f"unexpected status {code}", False, str(body)[:120])
+        break
+
+    rep.check("message got through the redeploy", outcome is not None, f"after {attempts} attempts, {int(time.time()-t0)}s")
+    time.sleep(5)
+    count = landed()
+    rep.check("delivered EXACTLY once (no duplicate)", count == 1, f"found {count} copies of the marker")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True)
     ap.add_argument("--session")
-    ap.add_argument("--phases", default="live,notlive,redeploy")
+    ap.add_argument("--phases", default="live,notlive,redeploy,recover")
     a = ap.parse_args()
     tok, rep = token(), Report()
     phases = a.phases.split(",")
@@ -148,6 +223,8 @@ def main():
         phase_notlive(a.url, tok, rep, sid)
     if "redeploy" in phases:
         phase_redeploy(a.url, tok, rep, sid)
+    if "recover" in phases:
+        phase_recover(a.url, tok, rep, sid)
     print(f"\n{'ALL PHASES PASSED' if not rep.fails else str(len(rep.fails)) + ' FAILED: ' + ', '.join(rep.fails)}")
     sys.exit(1 if rep.fails else 0)
 

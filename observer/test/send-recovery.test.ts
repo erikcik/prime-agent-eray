@@ -4,7 +4,7 @@
 // delivered twice. Those two goals conflict on an ambiguous failure, which is exactly where
 // a naive "retry on error" silently duplicates the operator's prompt.
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ApiError, OBSERVER_RESTARTING } from "../src/web/lib/api.ts";
 import { type SendApi, messageLanded, sendWithRecovery } from "../src/web/lib/send.ts";
 
@@ -67,10 +67,20 @@ describe("sendWithRecovery", () => {
 
 	// The observer-down window during a Redeploy.
 	it("retries through the proxy interstitial and delivers exactly once", async () => {
-		const { api, calls, delivered } = makeApi([restarting(), restarting(), "ok"]);
+		const { api, calls, delivered } = makeApi([restarting(), restarting(), "ok"], { landed: [] });
 		expect(await sendWithRecovery({ ...base, api })).toBe("retried");
 		expect(calls.prompt).toBe(3);
 		expect(delivered).toEqual([BODY]);
+	});
+
+	// Measured on the pod: the interstitial appears while the observer is alive and its
+	// serverStartedAt is unchanged, so it does NOT prove the request was refused. If the message
+	// did land, re-sending it would duplicate the operator's prompt.
+	it("does NOT re-send after a proxy interstitial whose message had already landed", async () => {
+		const { api, calls, delivered } = makeApi([restarting(), "ok"], { landed: [BODY] });
+		expect(await sendWithRecovery({ ...base, api })).toBe("confirmed");
+		expect(calls.prompt).toBe(1);
+		expect(delivered).toEqual([]);
 	});
 
 	// THE important one: an ambiguous failure where the message actually arrived.
@@ -165,7 +175,7 @@ describe("sendWithRecovery", () => {
 		const { api } = makeApi([restarting(), notLive(), "ok"]);
 		const seen: string[] = [];
 		await sendWithRecovery({ ...base, api, onStatus: (m) => seen.push(m) });
-		expect(seen.some((m) => /restarting/i.test(m))).toBe(true);
+		expect(seen.some((m) => /unreachable|restarting|checking/i.test(m))).toBe(true);
 		expect(seen.some((m) => /resuming/i.test(m))).toBe(true);
 	});
 });

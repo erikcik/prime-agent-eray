@@ -4,15 +4,19 @@
 //
 //   1. session_not_live  — a pod restart leaves every session inactive (`activeSessionId: null`),
 //      so POST /prompt is refused with 409. Nothing was delivered. Resume, then send.
-//   2. the RunPod interstitial — the proxy serves its own "waiting for service" page while the
-//      observer restarts (exit 87 after a Redeploy). The port was not accepting, so the request
-//      provably never landed. Safe to re-send.
-//   3. an ambiguous 5xx or a dropped connection — the proxy timed out upstream, or the socket
-//      died mid-flight. The observer MAY have processed the request. Re-sending blindly would
-//      duplicate a non-idempotent prompt, so we look for the message before trying again.
+//   2. the RunPod interstitial — the proxy serves its own "waiting for service" page. This was
+//      ASSUMED to mean the observer was down and the request never landed. That assumption was
+//      measured and found false: the page appears while the observer is alive and its
+//      serverStartedAt is unchanged (reproduced by sending immediately after creating a session
+//      with an initial prompt). It is a proxy-side hiccup, not proof of anything.
+//   3. an ambiguous 5xx or a dropped connection — the observer MAY have processed the request.
 //
-// Case 3 is why this lives in a tested module rather than inline in the component: "retry on
-// error" is wrong here, and the difference is invisible until someone's prompt is sent twice.
+// Because (2) turned out to be indistinguishable from (3) in what it actually guarantees, every
+// failed send except an explicit 409 is treated as ambiguous: we look for the message in the
+// transcript before re-sending. In 5/5 measured interstitials nothing had landed, but "probably
+// undelivered" is not a basis for an exactly-once guarantee, and the cost of being sure is one
+// extra GET. Only the 409 is trusted outright, because the server throws it in requireLive()
+// before touching the daemon — that is our own code, not proxy behaviour we cannot control.
 
 import { ApiError, OBSERVER_RESTARTING } from "./api.ts";
 
@@ -57,14 +61,14 @@ function isNotLive(error: unknown): boolean {
 	return error instanceof ApiError && (error.code === "session_not_live" || error.status === 409);
 }
 
-/** The proxy's own page: the observer was not listening, so nothing was delivered. */
-function isDefinitelyUndelivered(error: unknown): boolean {
+/** The proxy's own page — reported for the banner only; it proves nothing about delivery. */
+function isProxyPage(error: unknown): boolean {
 	return error instanceof ApiError && error.code === OBSERVER_RESTARTING;
 }
 
 /**
- * Might have landed, might not: a bare 5xx (upstream timeout) or a transport failure that
- * produced no status at all. Never re-send one of these without checking first.
+ * Might have landed, might not: any 5xx (proxy interstitial included) or a transport failure that
+ * produced no status at all. Never re-send one of these without checking the transcript first.
  */
 function isAmbiguous(error: unknown): boolean {
 	if (!(error instanceof ApiError)) return true; // a thrown TypeError from fetch: no status at all
@@ -148,19 +152,12 @@ export async function sendWithRecovery(options: SendOptions): Promise<SendOutcom
 				continue;
 			}
 
-			if (isDefinitelyUndelivered(error)) {
-				if (timeLeft <= 0) throw error;
-				status("The observer is restarting — retrying…");
-				outcome = "retried";
-				await sleep(backoffFor(attempt));
-				continue;
-			}
-
 			if (isAmbiguous(error)) {
 				if (timeLeft <= 0) throw error;
-				status("Connection lost — checking whether the message arrived…");
+				status(isProxyPage(error) ? "The observer is unreachable — retrying…" : "Connection lost — checking whether the message arrived…");
 				await sleep(backoffFor(attempt));
-				// The decisive check: never re-send something that already landed.
+				// The decisive check, applied to EVERY ambiguous failure including the proxy page:
+				// never re-send something that already landed.
 				if (await messageLanded(api, id, body)) return "confirmed";
 				outcome = "retried";
 				continue;
