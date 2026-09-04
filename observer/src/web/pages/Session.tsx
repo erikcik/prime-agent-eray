@@ -408,6 +408,12 @@ function md(text: string): string {
 	return DOMPurify.sanitize(marked.parse(text, { async: false }) as string);
 }
 
+// A Redeploy on the pod (git pull -> observer build -> exit 87 -> supervisor restart) was
+// measured at 35-60 s. The budget must comfortably exceed that or the retry loop exhausts
+// mid-restart and strands the message, which is exactly what a 20 s budget did.
+const SEND_RETRIES = 14;
+const SEND_RETRY_BUDGET_S = 90;
+
 type Attachment = { id: string; name: string; bytes: number; status: "uploading" | "done" | "error"; path?: string; error?: string };
 
 function formatBytesShort(bytes: number): string {
@@ -437,6 +443,20 @@ function Composer({ id, streaming, follow, setFollow }: { id: string; streaming:
 	const fileInput = useRef<HTMLInputElement>(null);
 	const uploading = attachments.some((a) => a.status === "uploading");
 
+	// A restart banner must not outlive the restart. Once the socket is open again the observer is
+	// demonstrably back, so a stale "observer is restarting" line is worse than nothing: it claims
+	// sending is impossible when pressing Send now works. Only subscribes while such a banner is
+	// actually up, and clears with a plain value (never a functional updater — `error` is typed
+	// `unknown`, so a function would be ambiguous between "new value" and "updater").
+	useEffect(() => {
+		if (!error) return;
+		const msg = error instanceof Error ? error.message : String(error);
+		if (!/observer is restarting|observer unreachable/i.test(msg)) return;
+		return socket.onStatus((s) => {
+			if (s === "open") setError(undefined);
+		});
+	}, [error]);
+
 	async function attachFiles(list: FileList | null) {
 		if (!list?.length) return;
 		// Sequential, not Promise.all: parallel large uploads starve each other on one uplink
@@ -465,20 +485,22 @@ function Composer({ id, streaming, follow, setFollow }: { id: string; streaming:
 			else await api.followUp(id, body);
 		};
 		try {
-			// A Redeploy takes the observer down for ~30 s (exit 87, then its supervisor restarts
-			// it). Pressing Send in that window used to fail and leave a banner sitting there for
-			// good. Retry only on OBSERVER_RESTARTING: that code is set when the RunPod proxy
-			// served its own page, which means the port was not accepting and the observer never
-			// received the request — so re-sending a non-idempotent prompt cannot duplicate it.
+			// A Redeploy takes the observer down while it pulls, rebuilds and restarts — measured
+			// at 35-60 s on the pod, not the ~20 s an earlier version of this loop allowed, which
+			// simply exhausted mid-restart and stranded the message anyway.
+			// Retry only on OBSERVER_RESTARTING: that code is set when the RunPod proxy served its
+			// own page, which means the port was not accepting and the observer never received the
+			// request — so re-sending a non-idempotent prompt cannot duplicate it.
 			for (let attempt = 0; ; attempt++) {
 				try {
 					await deliver();
 					break;
 				} catch (e) {
 					const retryable = e instanceof ApiError && e.code === OBSERVER_RESTARTING;
-					if (!retryable || attempt >= 5) throw e;
-					setError(new Error(`The observer is restarting — retrying (${attempt + 1}/5)…`));
-					await new Promise((r) => setTimeout(r, 4000));
+					if (!retryable || attempt >= SEND_RETRIES) throw e;
+					const waitMs = Math.min(2000 + attempt * 1000, 8000);
+					setError(new Error(`The observer is restarting — retrying (${attempt + 1}/${SEND_RETRIES}, up to ${SEND_RETRY_BUDGET_S}s)…`));
+					await new Promise((r) => setTimeout(r, waitMs));
 				}
 			}
 			setText("");
