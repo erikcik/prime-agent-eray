@@ -24,7 +24,7 @@
 	min-height: 44px;
 	padding: 0 20px;
 	border-bottom: var(--hair);
-	background: rgba(255, 255, 255, 0.92);
+	background: var(--paper-glass);
 	backdrop-filter: saturate(140%) blur(6px);
 	flex-wrap: wrap;
 }
@@ -219,7 +219,7 @@
 	cursor: pointer;
 }
 .agent-row:hover {
-	background: #f2f2f2;
+	background: var(--faint-strong);
 }
 .agent-row--deleted {
 	opacity: 0.5;
@@ -280,7 +280,7 @@
 	z-index: 50;
 	display: grid;
 	place-items: center;
-	background: rgba(10, 10, 10, 0.25);
+	background: var(--scrim);
 	padding: 20px;
 }
 .modal__card {
@@ -475,7 +475,7 @@
 }
 .seg button.is-active {
 	background: var(--ink);
-	color: #fff;
+	color: var(--paper);
 }
 .rail {
 	position: sticky;
@@ -664,8 +664,8 @@
 	padding: 10px 12px;
 	border: var(--hair);
 	border-radius: 7px;
-	background: var(--ink);
-	color: #e8e8e8;
+	background: var(--log-bg);
+	color: var(--log-fg);
 	font: 11px/1.5 var(--mono);
 	white-space: pre-wrap;
 	word-break: break-all;
@@ -673,7 +673,7 @@
 	overflow: auto;
 }
 .log .err {
-	color: #ff9fb3;
+	color: var(--log-err);
 }
 .phases {
 	display: flex;
@@ -758,4 +758,21 @@
 
 .attach-remove:hover {
 	color: var(--ink);
+}
+
+/* ---- theme toggle ------------------------------------------------------------------------ */
+.seg--icons button {
+	display: inline-flex;
+	align-items: center;
+	padding: 0 8px;
+	height: 24px;
+}
+.seg--icons svg {
+	display: block;
+}
+.login__brand-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../lib/api.ts";
 import { setToken } from "../lib/auth.ts";
+import { ThemeToggle } from "../components/ThemeToggle.tsx";
 
 export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
 	const [token, setTokenInput] = useState("");
@@ -28,8 +29,11 @@ export function LoginPage({ onAuthed }: { onAuthed: () => void }) {
 	return (
 		<div className="login">
 			<form className="login__card" onSubmit={submit}>
-				<div className="mono login__brand">
-					prime <span className="muted">·</span> observer
+				<div className="login__brand-row">
+					<div className="mono login__brand">
+						prime <span className="muted">·</span> observer
+					</div>
+					<ThemeToggle />
 				</div>
 				<h1 className="login__title">Sign in</h1>
 				<p className="muted small">Paste the observer token (the value of PRIME_OBSERVER_TOKEN on the host running Prime Agent).</p>

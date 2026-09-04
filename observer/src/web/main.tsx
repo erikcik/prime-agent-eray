@@ -2,10 +2,12 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./app.tsx";
+import { initTheme } from "./lib/theme.ts";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/components.css";
 
+initTheme();
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 createRoot(root).render(

@@ -6,7 +6,8 @@ import type { SessionDetail } from "../../shared/api.ts";
 import type { HarnessView } from "../../shared/harness.ts";
 import type { ServerMessage } from "../../shared/ws.ts";
 import { ConfirmDialog, Eyebrow, EmptyState, ErrorLine, Json, KV, MonoId, StatusPill, TimeAgo } from "../components/common.tsx";
-import { ApiError, OBSERVER_RESTARTING, api, openAuthenticated } from "../lib/api.ts";
+import { api, openAuthenticated } from "../lib/api.ts";
+import { sendWithRecovery } from "../lib/send.ts";
 import { clock, dateTime, modelShort, textOf, tokens, usd } from "../lib/format.ts";
 import { socket } from "../lib/ws.ts";
 import { fleetStore } from "../state/app-state.ts";
@@ -215,7 +216,7 @@ export function SessionPage() {
 						{live.streaming && <MessageBlock message={live.streaming} streaming />}
 						<div ref={bottomRef} />
 					</div>
-					{activeId && <Composer id={id} streaming={!!isStreaming} follow={follow} setFollow={setFollow} />}
+					{(activeId || node?.sessionFile) && <Composer id={id} streaming={!!isStreaming} live={!!activeId} follow={follow} setFollow={setFollow} />}
 				</div>
 				<aside className="rail">
 					<div className="rail__tabs">
@@ -408,11 +409,10 @@ function md(text: string): string {
 	return DOMPurify.sanitize(marked.parse(text, { async: false }) as string);
 }
 
-// A Redeploy on the pod (git pull -> observer build -> exit 87 -> supervisor restart) was
-// measured at 35-60 s. The budget must comfortably exceed that or the retry loop exhausts
-// mid-restart and strands the message, which is exactly what a 20 s budget did.
-const SEND_RETRIES = 14;
-const SEND_RETRY_BUDGET_S = 90;
+// A Redeploy (git pull -> observer build -> exit 87 -> supervisor restart) was measured at
+// 35-60 s on the pod, and a full container restart is slower still. The budget must comfortably
+// exceed that or recovery exhausts mid-restart and strands the message, which a 20 s budget did.
+const SEND_BUDGET_MS = 120_000;
 
 type Attachment = { id: string; name: string; bytes: number; status: "uploading" | "done" | "error"; path?: string; error?: string };
 
@@ -434,7 +434,7 @@ export function messageWithAttachments(text: string, attachments: Attachment[]):
 	return `${text}\n\nAttached files (already uploaded to this session's \`inbox/\` folder; open them with these cwd-relative paths):\n${lines.join("\n")}`;
 }
 
-function Composer({ id, streaming, follow, setFollow }: { id: string; streaming: boolean; follow: boolean; setFollow: (v: boolean) => void }) {
+function Composer({ id, streaming, live, follow, setFollow }: { id: string; streaming: boolean; live: boolean; follow: boolean; setFollow: (v: boolean) => void }) {
 	const [mode, setMode] = useState<"prompt" | "steer" | "followUp">("prompt");
 	const [text, setText] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -479,30 +479,20 @@ function Composer({ id, streaming, follow, setFollow }: { id: string; streaming:
 		if (!body) return;
 		setBusy(true);
 		setError(undefined);
-		const deliver = async () => {
-			if (mode === "prompt") await api.prompt(id, body);
-			else if (mode === "steer") await api.steer(id, body);
-			else await api.followUp(id, body);
-		};
 		try {
-			// A Redeploy takes the observer down while it pulls, rebuilds and restarts — measured
-			// at 35-60 s on the pod, not the ~20 s an earlier version of this loop allowed, which
-			// simply exhausted mid-restart and stranded the message anyway.
-			// Retry only on OBSERVER_RESTARTING: that code is set when the RunPod proxy served its
-			// own page, which means the port was not accepting and the observer never received the
-			// request — so re-sending a non-idempotent prompt cannot duplicate it.
-			for (let attempt = 0; ; attempt++) {
-				try {
-					await deliver();
-					break;
-				} catch (e) {
-					const retryable = e instanceof ApiError && e.code === OBSERVER_RESTARTING;
-					if (!retryable || attempt >= SEND_RETRIES) throw e;
-					const waitMs = Math.min(2000 + attempt * 1000, 8000);
-					setError(new Error(`The observer is restarting — retrying (${attempt + 1}/${SEND_RETRIES}, up to ${SEND_RETRY_BUDGET_S}s)…`));
-					await new Promise((r) => setTimeout(r, waitMs));
-				}
-			}
+			// All restart recovery lives in sendWithRecovery, which is unit-tested against every
+			// failure shape seen on the pod: an inactive session after a pod restart (resume then
+			// send), the proxy interstitial during a Redeploy (safe to re-send), and an ambiguous
+			// 5xx or dropped socket (check the transcript first — re-sending blindly would
+			// duplicate the prompt).
+			await sendWithRecovery({
+				id,
+				mode,
+				body,
+				api,
+				budgetMs: SEND_BUDGET_MS,
+				onStatus: (m) => setError(new Error(m)),
+			});
 			setText("");
 			setAttachments([]);
 			setError(undefined);
@@ -531,7 +521,17 @@ function Composer({ id, streaming, follow, setFollow }: { id: string; streaming:
 			<div className="composer__row">
 				<textarea
 					className="textarea grow"
-					placeholder={mode === "prompt" ? (streaming ? "Queued until the current turn ends…" : "Send a prompt") : mode === "steer" ? "Interrupt with a steering note" : "Follow-up after this turn"}
+					placeholder={
+						!live
+							? "Session is idle — sending will resume it first"
+							: mode === "prompt"
+								? streaming
+									? "Queued until the current turn ends…"
+									: "Send a prompt"
+								: mode === "steer"
+									? "Interrupt with a steering note"
+									: "Follow-up after this turn"
+					}
 					value={text}
 					onChange={(e) => setText(e.target.value)}
 					onKeyDown={(e) => {
@@ -557,7 +557,9 @@ function Composer({ id, streaming, follow, setFollow }: { id: string; streaming:
 						e.target.value = "";
 					}}
 				/>
-				<span className="tiny muted">Uploaded to this session's inbox/ and listed in the message by path.</span>
+				<span className="tiny muted">
+					{live ? "Uploaded to this session's inbox/ and listed in the message by path." : "Session is idle — sending resumes it first, then delivers your message."}
+				</span>
 			</div>
 			{attachments.length > 0 && (
 				<ul className="attach-list">

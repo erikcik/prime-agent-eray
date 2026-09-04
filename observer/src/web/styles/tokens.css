@@ -1,19 +1,31 @@
 /* Design tokens. White paper, near-black ink, one accent spent only where the machine is alive
    (running, waiting on the human, failed) or on the primary action. Geist for human copy,
-   Geist Mono for everything the harness owns (ids, paths, statuses, timestamps, logs, counters). */
+   Geist Mono for everything the harness owns (ids, paths, statuses, timestamps, logs, counters).
+
+   Dark mode inverts paper and ink and keeps the accent. The light palette lives on bare :root;
+   the dark palette is applied twice: for the system preference (unless the user pinned light)
+   and for an explicit data-theme="dark" pin. Every color in the UI must come from these tokens
+   so both themes stay complete. */
 :root {
 	--ink: #0a0a0a;
 	--ink-soft: #2b2b2b;
 	--paper: #ffffff;
+	--paper-glass: rgba(255, 255, 255, 0.92);
 	--accent: #ff5777;
 	--accent-deep: #e63e60;
+	--on-accent: #ffffff;
 	--line: #ececec;
 	--line-strong: #d8d8d8;
 	--mute: #8b8b8b;
 	--mute-soft: #b3b3b3;
 	--faint: #fafafa;
+	--faint-strong: #f2f2f2;
 	--tint: #fff2f5;
 	--tint-border: #ffd3dd;
+	--scrim: rgba(10, 10, 10, 0.25);
+	--log-bg: #0a0a0a;
+	--log-fg: #e8e8e8;
+	--log-err: #ff9fb3;
 
 	--sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 	--mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -28,4 +40,52 @@
 	font-family: var(--sans);
 	font-synthesis: none;
 	text-rendering: optimizeLegibility;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		--ink: #f0f0f0;
+		--ink-soft: #cdcdcd;
+		--paper: #0f0f0f;
+		--paper-glass: rgba(15, 15, 15, 0.92);
+		--accent: #ff5777;
+		--accent-deep: #ff7a93;
+		--on-accent: #ffffff;
+		--line: #242424;
+		--line-strong: #363636;
+		--mute: #8d8d8d;
+		--mute-soft: #5f5f5f;
+		--faint: #171717;
+		--faint-strong: #1e1e1e;
+		--tint: #2b141b;
+		--tint-border: #52212f;
+		--scrim: rgba(0, 0, 0, 0.6);
+		--log-bg: #000000;
+		--log-fg: #dcdcdc;
+		--log-err: #ff9fb3;
+		color-scheme: dark;
+	}
+}
+
+:root[data-theme="dark"] {
+	--ink: #f0f0f0;
+	--ink-soft: #cdcdcd;
+	--paper: #0f0f0f;
+	--paper-glass: rgba(15, 15, 15, 0.92);
+	--accent: #ff5777;
+	--accent-deep: #ff7a93;
+	--on-accent: #ffffff;
+	--line: #242424;
+	--line-strong: #363636;
+	--mute: #8d8d8d;
+	--mute-soft: #5f5f5f;
+	--faint: #171717;
+	--faint-strong: #1e1e1e;
+	--tint: #2b141b;
+	--tint-border: #52212f;
+	--scrim: rgba(0, 0, 0, 0.6);
+	--log-bg: #000000;
+	--log-fg: #dcdcdc;
+	--log-err: #ff9fb3;
+	color-scheme: dark;
 }

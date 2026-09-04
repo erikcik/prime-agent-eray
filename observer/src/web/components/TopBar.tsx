@@ -5,6 +5,7 @@ import { api } from "../lib/api.ts";
 import { daemonStore, deployStore, fleetStore, socketStore } from "../state/app-state.ts";
 import { useStore } from "../state/store.ts";
 import { ConfirmDialog } from "./common.tsx";
+import { ThemeToggle } from "./ThemeToggle.tsx";
 
 const NAV: Array<[string, string]> = [
 	["/signal", "signal"],
@@ -65,6 +66,7 @@ export function TopBar() {
 				<span className={`pill ${sockClass}`} title="observer socket">
 					{sock === "open" ? "socket live" : sock}
 				</span>
+				<ThemeToggle />
 				<button type="button" className={`btn btn--accent btn--small${deploy.running ? " is-busy" : ""}`} onClick={() => setConfirm(true)} disabled={deploy.running} title="Pull the latest code, rebuild, restart the observer">
 					<RefreshCw size={12} className={deploy.running ? "spin" : ""} />
 					{deploy.running ? "deploying…" : "Redeploy"}

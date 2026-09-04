@@ -48,12 +48,12 @@ textarea {
 	height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-	background: #d9d9d9;
+	background: var(--line-strong);
 	border-radius: 99px;
 }
 * {
 	scrollbar-width: thin;
-	scrollbar-color: #d9d9d9 transparent;
+	scrollbar-color: var(--line-strong) transparent;
 }
 
 /* ---- primitives ------------------------------------------------------------------------ */
@@ -133,7 +133,7 @@ textarea {
 .pill--ink {
 	background: var(--ink);
 	border-color: var(--ink);
-	color: #fff;
+	color: var(--paper);
 }
 .pill--ghost {
 	border-color: var(--line);
@@ -213,7 +213,7 @@ textarea {
 .btn--primary {
 	background: var(--ink);
 	border-color: var(--ink);
-	color: #fff;
+	color: var(--paper);
 }
 .btn--primary:hover {
 	background: var(--ink-soft);
@@ -229,7 +229,7 @@ textarea {
 .btn--accent.is-busy {
 	background: var(--accent);
 	border-color: var(--accent);
-	color: #fff;
+	color: var(--on-accent);
 }
 .btn--small {
 	height: 24px;
