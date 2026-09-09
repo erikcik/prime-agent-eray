@@ -23,7 +23,11 @@ set -a; . "$envfile"; set +a
 
 KEYS=(PRIME_OBSERVER_TOKEN NANO_GPT_API_KEY ANTHROPIC_OAUTH_TOKEN SERPER_API_KEY
       DEPLOY_GIT_SSH_KEY DEPLOY_REPO_URL DEPLOY_REPO_BRANCH PUBLIC_KEY
-      PRIME_OBSERVER_ALLOWED_ORIGINS DEPLOY_DEFAULT_PROVIDER DEPLOY_DEFAULT_MODEL)
+      PRIME_OBSERVER_ALLOWED_ORIGINS DEPLOY_DEFAULT_PROVIDER DEPLOY_DEFAULT_MODEL
+      # Self-hosted model on a GPU pod. RUNPOD_DEPLOY_KEY is deliberately not named
+      # RUNPOD_API_KEY: the entrypoint scrubs that name so agents can never reach the RunPod
+      # control plane, then injects this one into the observer process alone.
+      RUNPOD_DEPLOY_KEY VLLM_API_KEY)
 
 KEYS="${KEYS[*]}" OUT="$out" python3 - <<'PY'
 import json, os

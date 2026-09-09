@@ -40,9 +40,15 @@ CFG = os.path.expanduser("~/.runpod/config.toml")
 
 
 def _key() -> str:
-    env = os.environ.get("RUNPOD_API_KEY")
+    # RUNPOD_API_KEY is what the entrypoint injects into the observer process. RUNPOD_DEPLOY_KEY is
+    # the raw pod env var, accepted as a fallback so this works on a pod whose *image* still carries
+    # the older entrypoint: entrypoint.sh is COPYd into the image, so a git pull can never update
+    # it, only an image rebuild can.
+    env = os.environ.get("RUNPOD_API_KEY") or os.environ.get("RUNPOD_DEPLOY_KEY")
     if env:
         return env
+    if not os.path.exists(CFG):
+        raise SystemExit("no RunPod key: set RUNPOD_API_KEY or RUNPOD_DEPLOY_KEY, or create ~/.runpod/config.toml")
     cfg = open(CFG).read()
     m = re.search(r"apikey\s*=\s*['\"]?([^'\"\s]+)['\"]?", cfg)
     if not m:
