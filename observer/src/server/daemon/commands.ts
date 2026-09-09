@@ -110,6 +110,15 @@ export class DaemonCommands {
 		return this.send({ type: "get_session_stats", activeSessionId });
 	}
 
+	getSessionTree(activeSessionId: string) {
+		return this.send<{ flatNodes: unknown[]; leafId: string | null }>({ type: "get_session_tree", activeSessionId }, 60000);
+	}
+
+	navigateTree(activeSessionId: string, targetId: string, opts: { summarize?: boolean; customInstructions?: string; label?: string } = {}) {
+		// Summarizing the abandoned branch is a model call; give it the same room as refine.
+		return this.send<{ editorText?: string; cancelled: boolean; aborted?: boolean; summaryEntry?: unknown }>({ type: "navigate_tree", activeSessionId, targetId, ...opts }, opts.summarize ? 180000 : 60000);
+	}
+
 	getContextTree(activeSessionId: string) {
 		return this.send({ type: "get_context_tree", activeSessionId });
 	}

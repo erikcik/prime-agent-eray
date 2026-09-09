@@ -84,7 +84,14 @@ export PATH="$APP_DIR/node_modules/.bin:$PATH"
 mkdir -p "$AGENT_DIR" "$PROJECT_DIR" "$STATE_DIR"
 
 # Agents must never see the RunPod control-plane key (it can delete this pod and its volume).
-unset RUNPOD_API_KEY
+#
+# The observer, however, needs one to create and terminate the GPU model pod from the Ops page. So
+# the key arrives under a DIFFERENT name, is captured into a shell variable here, and is scrubbed
+# from the environment before anything is launched. serve() then injects it as RUNPOD_API_KEY into
+# the observer process only — supervise_daemon starts from the scrubbed environment, so agents still
+# never see it, and DeployRunner separately strips it before running the deploy hook.
+OBSERVER_RUNPOD_KEY="${RUNPOD_DEPLOY_KEY:-}"
+unset RUNPOD_API_KEY RUNPOD_DEPLOY_KEY
 
 # Deploy key for the private repo, delivered via env. It lives on CONTAINER disk (~/.ssh), never on the
 # volume: RunPod network volumes ignore chmod, so a key there reads back 0666 and ssh refuses it.
@@ -195,10 +202,16 @@ serve() {
   export PRIME_OBSERVER_DEPLOY_HOOK="$APP_DIR/deploy/refresh.sh"
   export PRIME_OBSERVER_PRIME_AGENT_BIN="$HOME/.local/bin/prime-agent"
   export PRIME_AGENT_BIN="$HOME/.local/bin/prime-agent"
+  # Started BEFORE the observer gets its RunPod key, from the scrubbed environment.
   supervise_daemon &
   echo "$OBSERVER_PORT" >/tmp/observer-serving
+  if [[ -n "$OBSERVER_RUNPOD_KEY" ]]; then
+    log "observer has a RunPod key (model pod deploy enabled); the daemon does not"
+  else
+    log "no RUNPOD_DEPLOY_KEY set: the Ops 'Deploy model' button will fail until one is provided"
+  fi
   # run-observer.sh restarts on exit 87 (redeploy) and backs off on crashes.
-  exec bash "$APP_DIR/deploy/run-observer.sh"
+  exec env ${OBSERVER_RUNPOD_KEY:+RUNPOD_API_KEY="$OBSERVER_RUNPOD_KEY"} bash "$APP_DIR/deploy/run-observer.sh"
 }
 
 case "$cmd" in

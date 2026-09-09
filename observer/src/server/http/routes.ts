@@ -18,6 +18,7 @@ import type { DaemonCommands } from "../daemon/commands.ts";
 import { daemonLogTail, ensureConnectedSoon, startDaemon } from "../daemon/lifecycle.ts";
 import type { SessionStreamer } from "../daemon/session-streamer.ts";
 import type { DeployRunner } from "../deploy/runner.ts";
+import type { ModelPodService } from "../model-pod/service.ts";
 import { readSessionArtifacts } from "../disk/artifacts-reader.ts";
 import { buildHarnessView } from "../disk/harness-reader.ts";
 import { type AgentPaths, artifactDirForSessionFile, localHarnessDir, parentArtifactDirFromChildFile } from "../disk/paths.ts";
@@ -39,6 +40,7 @@ export interface RouteDeps {
 	streamer: SessionStreamer;
 	comms: CommsIndex;
 	deploy: DeployRunner;
+	modelPod: ModelPodService;
 	exporter: HtmlExporter;
 	hub: Hub;
 	serverStartedAt: string;
@@ -86,6 +88,23 @@ export function registerRoutes(r: Router, d: RouteDeps): void {
 	});
 
 	// ---- fleet / sessions -----------------------------------------------------------------
+	// ---- model pod (self-hosted vLLM GPU pod) ----------------------------------------------
+	// Separate from /api/deploy on purpose: that redeploys the harness, this starts and stops the
+	// expensive GPU that serves the local model. They have different blast radii and costs.
+	r.get("/api/model-pod", () => d.modelPod.status());
+
+	r.post("/api/model-pod/deploy", async () => {
+		const s = await d.modelPod.deploy();
+		d.hub.publish("deploy", { t: "deploy.log", runId: "model-pod", line: `model pod ${s.phase}${s.podId ? ` (${s.podId})` : ""}`, stream: "out", at: new Date().toISOString() });
+		return s;
+	});
+
+	r.post("/api/model-pod/stop", async () => {
+		const s = await d.modelPod.stop();
+		d.hub.publish("deploy", { t: "deploy.log", runId: "model-pod", line: `model pod stopped`, stream: "out", at: new Date().toISOString() });
+		return s;
+	});
+
 	r.get("/api/fleet", () => d.fleet.current());
 
 	r.get("/api/sessions", (ctx) => {

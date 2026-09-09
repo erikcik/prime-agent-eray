@@ -155,6 +155,13 @@ class SessionStream {
 		}
 	}
 
+	/** Replace the cached transcript after a server-initiated change (a rewind) and fan it out. */
+	replace(state: unknown, messages: unknown[]): void {
+		if (!this.snapshot) return;
+		this.snapshot = { ...this.snapshot, state, messages: [...messages], streamingMessage: undefined, recap: (state as { recap?: string } | undefined)?.recap ?? this.snapshot.recap, capturedAt: new Date().toISOString() };
+		this.emit({ kind: "snapshot", snapshot: this.snapshot });
+	}
+
 	subscribe(listener: Listener): () => void {
 		this.refs++;
 		this.listeners.add(listener);
@@ -245,6 +252,11 @@ export class SessionStreamer {
 			.finally(() => this.opening.delete(activeSessionId));
 		this.opening.set(activeSessionId, p);
 		return p;
+	}
+
+	/** Push a fresh transcript to every viewer of a session; a no-op when nobody is watching. */
+	replace(activeSessionId: string, state: unknown, messages: unknown[]): void {
+		this.streams.get(activeSessionId)?.replace(state, messages);
 	}
 
 	activeIds(): string[] {

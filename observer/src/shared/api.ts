@@ -96,6 +96,23 @@ export interface DeployRun {
 	running: boolean;
 }
 
+export type ModelPodPhase = "absent" | "starting" | "downloading" | "ready" | "stopped" | "error";
+
+export interface ModelPodStatus {
+	phase: ModelPodPhase;
+	podId?: string;
+	url?: string;
+	healthy: boolean;
+	servedModel?: string;
+	gpu?: string;
+	cloud?: string;
+	costPerHr?: number;
+	createdAt?: string;
+	everHealthy?: boolean;
+	lastError?: string;
+	note?: string;
+}
+
 export interface ApiError {
 	error: string;
 	code?: string;
@@ -113,3 +130,36 @@ export type {
 	SkillDoc,
 	SkillSummary,
 };
+
+/** One place the conversation can be rewound to: a user message on the current branch. */
+export interface RewindPoint {
+	entryId: string;
+	/** 0-based position among the branch's user messages, oldest first. */
+	index: number;
+	text: string;
+	timestamp?: string | number;
+	label?: string;
+}
+
+export interface RewindPointsResponse {
+	points: RewindPoint[];
+	leafId: string | null;
+	activeSessionId: string;
+}
+
+export interface RewindRequest {
+	entryId: string;
+	/** Ask the model to summarize the abandoned branch into a note the agent keeps. */
+	summarize?: boolean;
+	/** Live id to use when the fleet has not yet noticed a just-resumed session. */
+	activeSessionId?: string;
+}
+
+export interface RewindResponse {
+	ok: true;
+	cancelled: boolean;
+	aborted?: boolean;
+	/** The rewound-to user message, offered back into the composer so it can be re-asked. */
+	editorText?: string;
+	summarized: boolean;
+}

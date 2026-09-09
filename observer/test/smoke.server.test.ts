@@ -74,6 +74,12 @@ describe("observer server (daemon offline)", () => {
 		const id = "01a0aaaa-0000-7000-8000-000000000001";
 		const res = await fetch(`${base}/api/sessions/${id}/abort`, { method: "POST", headers: auth });
 		expect([409, 503]).toContain(res.status);
+		const points = await fetch(`${base}/api/sessions/${id}/rewind-points`, { headers: auth });
+		expect([409, 503]).toContain(points.status);
+		const rewind = await fetch(`${base}/api/sessions/${id}/rewind`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ entryId: "x" }) });
+		expect([409, 503]).toContain(rewind.status);
+		const bad = await fetch(`${base}/api/sessions/${id}/rewind`, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({}) });
+		expect(bad.status).toBe(400);
 	});
 	it("rejects a deploy when the hook is missing", async () => {
 		const res = await fetch(`${base}/api/deploy`, { method: "POST", headers: auth });

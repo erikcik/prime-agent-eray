@@ -38,6 +38,35 @@
           }
         }
       ]
+    },
+    "local-vllm": {
+      "name": "Local vLLM (RunPod GPU pod)",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "api": "openai-completions",
+      "apiKey": "VLLM_API_KEY",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "supportsUsageInStreaming": true
+      },
+      "models": [
+        {
+          "id": "qwen3.8-27b-abliterated",
+          "name": "Qwen3.8-27B abliterated (AWQ-MTP, self-hosted)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 131072,
+          "maxTokens": 32768,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
     }
   }
 }

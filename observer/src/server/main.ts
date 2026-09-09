@@ -9,6 +9,7 @@ import { DaemonBridge } from "./daemon/bridge.ts";
 import { DaemonCommands } from "./daemon/commands.ts";
 import { SessionStreamer } from "./daemon/session-streamer.ts";
 import { DeployRunner, RESTART_EXIT_CODE } from "./deploy/runner.ts";
+import { ModelPodService } from "./model-pod/service.ts";
 import { agentPaths } from "./disk/paths.ts";
 import { AgentDirWatcher } from "./disk/watcher.ts";
 import { loadEnv } from "./env.ts";
@@ -103,6 +104,16 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		},
 	});
 
+	// The GPU pod that serves the self-hosted model. Its log lines ride the existing "deploy" topic
+	// so the Ops console shows model-pod progress without a second WebSocket channel.
+	const modelPod = new ModelPodService({
+		repoRoot: env.repoRoot,
+		dataDir: env.dataDir,
+		agentDir: env.agentDir,
+		apiKey: process.env.VLLM_API_KEY,
+		onLine: (line) => hub.publish("deploy", { t: "deploy.log", runId: "model-pod", line, stream: "out", at: new Date().toISOString() }),
+	});
+
 	fleet.onTree((tree) => hub.publish("fleet", { t: "fleet.snapshot", tree }));
 	bridge.subscribe({ onState: (info) => hub.publish("daemon", { t: "daemon.state", daemon: info }) });
 	watcher.onChange((events) => {
@@ -121,6 +132,7 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		streamer,
 		comms,
 		deploy,
+		modelPod,
 		exporter,
 		hub,
 		serverStartedAt,

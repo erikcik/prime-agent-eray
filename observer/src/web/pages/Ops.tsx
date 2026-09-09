@@ -13,9 +13,10 @@ export function OpsPage() {
 	const [log, setLog] = useState<string[]>([]);
 	const [logPath, setLogPath] = useState("");
 	const [error, setError] = useState<unknown>();
-	const [confirm, setConfirm] = useState<"restart" | "shutdown" | "deploy" | undefined>();
+	const [confirm, setConfirm] = useState<"restart" | "shutdown" | "deploy" | "model" | "modelStop" | undefined>();
 	const [busy, setBusy] = useState(false);
 	const [lastDeploy, setLastDeploy] = useState<Awaited<ReturnType<typeof api.deployLast>>>();
+	const [pod, setPod] = useState<Awaited<ReturnType<typeof api.modelPod>>>();
 
 	const loadLog = useCallback(async () => {
 		try {
@@ -33,6 +34,39 @@ export function OpsPage() {
 		const t = setInterval(() => void loadLog(), 10_000);
 		return () => clearInterval(t);
 	}, [loadLog]);
+
+	// A cold model pod pulls ~19.5 GB before it answers, so the card polls rather than relying on
+	// the deploy call to return a finished state. Faster while it is still coming up.
+	const loadPod = useCallback(async () => {
+		try {
+			setPod(await api.modelPod());
+		} catch {
+			// leave the last known state on screen; the next tick retries
+		}
+	}, []);
+
+	// Self-scheduling rather than setInterval, and the phase is read from a ref rather than from the
+	// dependency array. Putting `pod` in the deps of an effect that also sets `pod` re-runs the
+	// effect on every response, which fires the next request immediately instead of after the
+	// interval — an unbounded request storm against both the observer and the RunPod API.
+	const podRef = useRef(pod);
+	podRef.current = pod;
+	useEffect(() => {
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout>;
+		const tick = async () => {
+			if (cancelled) return;
+			await loadPod();
+			const p = podRef.current?.phase;
+			const settling = p === "starting" || p === "downloading";
+			timer = setTimeout(tick, settling ? 5_000 : 20_000);
+		};
+		void tick();
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
+	}, [loadPod]);
 
 	// After a successful deploy the server exits 87; poll health until it is back, then reload.
 	const restartingRef = useRef(false);
@@ -57,7 +91,7 @@ export function OpsPage() {
 		return () => clearInterval(t);
 	}, [deploy.willRestart, version?.serverStartedAt]);
 
-	async function run(action: "start" | "restart" | "shutdown" | "deploy") {
+	async function run(action: "start" | "restart" | "shutdown" | "deploy" | "model" | "modelStop") {
 		setConfirm(undefined);
 		setBusy(true);
 		setError(undefined);
@@ -66,8 +100,12 @@ export function OpsPage() {
 			if (action === "restart") await api.daemonRestart();
 			if (action === "shutdown") await api.daemonShutdown();
 			if (action === "deploy") await api.deploy();
-			await refreshHealth();
-			await loadLog();
+			if (action === "model") setPod(await api.modelPodDeploy());
+			if (action === "modelStop") setPod(await api.modelPodStop());
+			if (action !== "model" && action !== "modelStop") {
+				await refreshHealth();
+				await loadLog();
+			}
 		} catch (e) {
 			setError(e);
 		} finally {
@@ -132,6 +170,31 @@ export function OpsPage() {
 						</details>
 					</div>
 				</section>
+				<section className="card">
+					<header className="card__head">
+						<Eyebrow ink>local model</Eyebrow>
+						<span className={`pill ${pod?.phase === "ready" ? "pill--ink" : pod?.phase === "error" ? "pill--fail" : pod?.phase && pod.phase !== "absent" && pod.phase !== "stopped" ? "pill--live" : ""}`}>{pod?.phase ?? "…"}</span>
+					</header>
+					<div className="card__body col" style={{ gap: 10 }}>
+						<KV k="model" v={pod?.servedModel ?? "qwen3.8-27b-abliterated"} mono />
+						<KV k="thinking" v="always on (xhigh)" mono />
+						<KV k="pod" v={pod?.podId ?? "—"} mono />
+						<KV k="gpu" v={pod?.gpu ?? "—"} mono />
+						<KV k="cost" v={pod?.costPerHr ? `$${pod.costPerHr}/hr while running` : "—"} mono />
+						{pod?.note && <div className="mono tiny muted">{pod.note}</div>}
+						{/* The deploy script reports one candidate per line; pre-wrap keeps that readable
+						    instead of collapsing four attempts into one dense paragraph. */}
+						{pod?.lastError && <div className="mono tiny err" style={{ whiteSpace: "pre-wrap", maxHeight: 160, overflowY: "auto" }}>{pod.lastError}</div>}
+						<div className="row wrap">
+							<button type="button" className="btn btn--accent btn--small" disabled={busy || pod?.phase === "ready" || pod?.phase === "downloading" || pod?.phase === "starting"} onClick={() => setConfirm("model")}>
+								{pod?.phase === "stopped" ? "Start model" : "Deploy model"}
+							</button>
+							<button type="button" className="btn btn--small btn--danger" disabled={busy || !pod?.podId || pod?.phase === "stopped"} onClick={() => setConfirm("modelStop")}>
+								Stop model
+							</button>
+						</div>
+					</div>
+				</section>
 				<section className="card" style={{ gridColumn: "1 / -1" }}>
 					<header className="card__head">
 						<div className="row">
@@ -184,6 +247,37 @@ export function OpsPage() {
 			</div>
 			{confirm === "restart" && <ConfirmDialog title="Restart daemon" body={<p>Restarts the supervisor. Running turns are interrupted; sessions remain resumable.</p>} confirmLabel="Restart" danger onConfirm={() => void run("restart")} onCancel={() => setConfirm(undefined)} />}
 			{confirm === "shutdown" && <ConfirmDialog title="Shut down daemon" body={<p>Stops every agent, worker and background service. On the pod the supervisor loop will start it again.</p>} confirmLabel="Shut down" danger onConfirm={() => void run("shutdown")} onCancel={() => setConfirm(undefined)} />}
+			{confirm === "model" && (
+				<ConfirmDialog
+					title={pod?.phase === "stopped" ? "Start the model pod" : "Deploy the model pod"}
+					body={
+						<p>
+							{pod?.phase === "stopped"
+								? "Restarts the stopped GPU pod. The weights are already cached on the network volume, so this is a warm boot of a few minutes."
+								: "Creates a GPU pod in EU-RO-1 on the existing network volume and serves Qwen3.8-27B abliterated with thinking always on. First boot downloads ~19.5 GB."}{" "}
+							It bills by the hour for as long as it runs — stop it when you are done.
+						</p>
+					}
+					confirmLabel={pod?.phase === "stopped" ? "Start it" : "Deploy it"}
+					onConfirm={() => void run("model")}
+					onCancel={() => setConfirm(undefined)}
+				/>
+			)}
+			{confirm === "modelStop" && (
+				<ConfirmDialog
+					title="Stop the model pod"
+					body={
+						<p>
+							Ends GPU billing by terminating the pod. The 19.5 GB of weights stay on the network volume, so deploying again is still a warm boot &mdash; and terminating avoids a pod being
+							stranded on a host whose GPU another tenant has taken. Any agent using this model will start failing until it is back.
+						</p>
+					}
+					confirmLabel="Stop it"
+					danger
+					onConfirm={() => void run("modelStop")}
+					onCancel={() => setConfirm(undefined)}
+				/>
+			)}
 			{confirm === "deploy" && <ConfirmDialog title="Redeploy" body={<p>Pull the latest commit, rebuild what changed, and restart the observer. The harness daemon is only restarted when packages/ changed.</p>} confirmLabel="Redeploy now" danger onConfirm={() => void run("deploy")} onCancel={() => setConfirm(undefined)} />}
 		</>
 	);

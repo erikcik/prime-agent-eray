@@ -10641,6 +10641,14 @@ export class AgentSession {
 				});
 				await child.waitForRlmQuiescence();
 				if (run.error) throw new Error(run.error);
+				// A child whose provider rejected the run settles quiescent with no reply, which is
+				// otherwise indistinguishable from a child that simply had nothing to say. Only the
+				// final message is terminal here: transient provider errors are retried internally,
+				// so an intermediate errored message_end must not fail the run.
+				const lastChildAssistant = child._findLastAssistantMessage();
+				if (lastChildAssistant?.stopReason === "error" && lastChildAssistant.errorMessage) {
+					throw new Error(lastChildAssistant.errorMessage);
+				}
 				run.status = "done";
 				run.durationMs = Date.now() - startedAt;
 				run.activity = undefined;
