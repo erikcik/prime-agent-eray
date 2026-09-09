@@ -241,19 +241,22 @@ export class ModelPodService {
 			this.log.warn(`no readable models.json at ${path}; creating one`);
 		}
 		doc.providers ??= {};
-		if (!doc.providers[PROVIDER_ID]) {
-			// Take the canonical definition from the repo rather than duplicating it here, so the
-			// model id, context window and the reasoning flags have exactly one source of truth.
-			try {
-				const repo = JSON.parse(await readFile(join(this.opts.repoRoot, "deploy", "models.json"), "utf8")) as Doc;
-				const seed = repo.providers?.[PROVIDER_ID];
-				if (!seed) throw new Error(`deploy/models.json has no "${PROVIDER_ID}" provider`);
-				doc.providers[PROVIDER_ID] = seed;
-				this.opts.onLine(`models.json: installed the "${PROVIDER_ID}" provider (was missing on this volume)`);
-			} catch (e) {
-				this.log.warn(`could not seed "${PROVIDER_ID}" into models.json: ${(e as Error).message}`);
-				return;
-			}
+		// Reconcile the WHOLE provider definition from the repo on every deploy, not just install it
+		// when absent. This is what makes "edit deploy/models.json, redeploy" actually propagate: a
+		// change like adding image input reaches a volume that already had the provider, instead of
+		// being stuck behind the install-if-missing guard forever. The resolved baseUrl (below) is
+		// the one field the repo cannot know, so it is always written last and wins.
+		try {
+			const repo = JSON.parse(await readFile(join(this.opts.repoRoot, "deploy", "models.json"), "utf8")) as Doc;
+			const canonical = repo.providers?.[PROVIDER_ID];
+			if (!canonical) throw new Error(`deploy/models.json has no "${PROVIDER_ID}" provider`);
+			const existed = !!doc.providers[PROVIDER_ID];
+			doc.providers[PROVIDER_ID] = canonical;
+			this.opts.onLine(`models.json: ${existed ? "reconciled" : "installed"} the "${PROVIDER_ID}" provider from the repo definition`);
+		} catch (e) {
+			this.log.warn(`could not reconcile "${PROVIDER_ID}" into models.json: ${(e as Error).message}`);
+			// Fall through: if the provider is already present we can still refresh its baseUrl below.
+			if (!doc.providers[PROVIDER_ID]) return;
 		}
 		const p = doc.providers[PROVIDER_ID];
 		if (!p) return;

@@ -119,6 +119,11 @@ def docker_args() -> str:
             # qwen3_coder, not hermes: it is the parser the vLLM recipe pairs with this model.
             "--tool-call-parser", "qwen3_coder",
             "--enable-auto-tool-choice",
+            # Qwen3.8-27B is natively multimodal and the AWQ repo keeps the vision tower unquantized,
+            # so vLLM serves image input. Cap it at one image per prompt: each image expands into a
+            # block of vision tokens that share the KV budget with the GatedDeltaNet state, and an
+            # unbounded default is an easy way to OOM the 96 GB card under fan-out.
+            "--limit-mm-per-prompt", "'" + json.dumps({"image": 1}) + "'",
             "--trust-remote-code",
         ]
     )

@@ -55,7 +55,8 @@
           "name": "Qwen3.8-27B abliterated (AWQ-MTP, self-hosted)",
           "reasoning": true,
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "contextWindow": 131072,
           "maxTokens": 32768,
