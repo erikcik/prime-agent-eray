@@ -107,3 +107,76 @@ annoyance.
   the pod pulls from git and the changes are uncommitted.
 * Soak was ~25 s of continuous load, not hours.
 * Concurrency above the configured 16 is untested by design.
+
+---
+
+# Round 2 — pod to pod, the real deployment (same day)
+
+Everything above ran the observer on a Mac. This round runs it where it actually lives: the harness
+on a **CPU pod** using a model on a **separate GPU pod**, both mounting the same network volume.
+
+* CPU pod `ej5v60mux2gay9` (`cpu3g-4-16`, $0.16/hr) — harness + observer
+* GPU pod `u9lxg27kpmheau` (RTX PRO 6000 Server Edition, $2.09/hr) — **created by the CPU pod's own
+  observer**, not from a laptop
+
+## The chain, verified
+
+Click Deploy model → `POST /api/model-pod/deploy` → GPU pod placed in EU-RO-1 on the shared volume →
+`local-vllm` **installed into the volume's models.json** → baseUrl rewritten → daemon resolves the
+model → session opens → **model answers through the harness in 8 s**, thinking captured as a
+`thinking` content part, `cost.total: 0`.
+
+Then, through the **real ipython kernel path** (not the SDK shortcut), a parent on the local model
+ran `await asyncio.gather(*[rlm.run(..., model="local-vllm/qwen3.8-27b-abliterated") ...])`:
+
+```
+children=4  canaries=[FANOUT-0 FANOUT-1 FANOUT-2 FANOUT-3]
+  local-vllm/qwen3.8-27b-abliterated  done  4765 tok
+  local-vllm/qwen3.8-27b-abliterated  done  4816 tok
+  local-vllm/qwen3.8-27b-abliterated  done  5044 tok
+  local-vllm/qwen3.8-27b-abliterated  done  5146 tok
+```
+
+4/4 in ~10 s, all on the local model. Notably the 27B parent drove the multi-step kernel
+instruction correctly, which the earlier literal-marker weakness had suggested it might not.
+
+## Three deployment facts that cost time to learn
+
+**1. A fresh pod does not get fresh code.** `ensure_checkout` only clones when `/workspace/app` is
+absent. A volume with an existing checkout boots the OLD commit — this pod came up on `ef290179`
+and the new route 404'd. Pulling is Redeploy's job. **Deploy the pod, then hit Redeploy once.**
+
+**2. `entrypoint.sh` is baked into the image.** It is `COPY`d to `/usr/local/bin/` and named by
+`ENTRYPOINT`, so no `git pull` can ever update it — only an image rebuild. Anything that must change
+entrypoint behaviour is a rebuild, not a redeploy.
+
+**3. Three layers move independently:** volume checkout (Redeploy), observer build (follows the
+checkout), container image (rebuild + push only). "Deploy a fresh pod" is the *weakest* way to pick
+up a change, not the strongest.
+
+## Integration gaps found and fixed before this worked
+
+* **The observer had no RunPod credential.** `entrypoint.sh` unsets `RUNPOD_API_KEY` so agents can
+  never reach the control plane. The observer needs one to create the GPU pod. Now delivered as
+  `RUNPOD_DEPLOY_KEY`, scrubbed from the shared environment and injected into the observer alone.
+* **The provider would never have existed on an old volume.** The entrypoint seeds models.json only
+  when absent, and this volume predates the feature. `ModelPodService` now installs the provider
+  from the repo definition rather than only patching its baseUrl. This was the difference between
+  working and permanently invisible.
+* **`env-json.sh` did not forward the new keys**, so they never reached the pod.
+
+## OPEN: a security regression on the current image
+
+Because `entrypoint.sh` is baked in, the scrub-and-inject is **not active** until the image is
+rebuilt. On the running image the older entrypoint unsets only `RUNPOD_API_KEY`, so **agents on the
+CPU pod can read `RUNPOD_DEPLOY_KEY`, which can delete both pods and the network volume.**
+
+Close it by rebuilding and pushing the image (see deploy/README.md), or by removing
+`RUNPOD_DEPLOY_KEY` from the pod env — the harness can still *use* a running GPU pod without it;
+only the Deploy button needs it.
+
+## A verification mistake worth recording
+
+`/api/models` with `source: "disk"` lists models used by **existing sessions**, not the contents of
+models.json. A newly installed provider is legitimately absent from it. Creating a session is the
+only real check that a provider resolves.
