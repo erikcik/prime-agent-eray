@@ -90,6 +90,9 @@ describe("runner and advisor helpers", () => {
 		expect(looksLikeIntervention("you should have researched first. Benchmark this")).toBe(true);
 		expect(looksLikeIntervention("make a bench mark out of it")).toBe(true);
 		expect(looksLikeIntervention("deploy the site")).toBe(false);
+		const injected = advisorMessage("writing store copy", [{ variant: { id: "v", name: "v", skill: "x" } } as VerifiedSkill]);
+		expect(injected).toMatch(/benchmark/i);
+		expect(looksLikeIntervention(injected)).toBe(false);
 	});
 
 	it("inserts skill text verbatim in advisor messages and installed skills", () => {

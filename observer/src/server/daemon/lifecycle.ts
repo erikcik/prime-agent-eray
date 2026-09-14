@@ -6,25 +6,43 @@ import type { DaemonBridge } from "./bridge.ts";
 
 const log = logger("lifecycle");
 
+/** How long a freshly spawned supervisor must survive before we call the start successful. */
+const EARLY_EXIT_MS = 3000;
+
 /**
- * Start the daemon by shelling out to the Prime Agent CLI (`prime-agent daemon start`), which
- * spawns a detached supervisor and polls the socket. We never import the launcher.
+ * Start a detached daemon supervisor the way the CLI's own launcher does
+ * (`cli/daemon-launch.ts`: `<entrypoint> --mode daemon --daemon-socket <path>`). The old
+ * `prime-agent daemon start` subcommand no longer exists. The supervisor is long-lived, so we
+ * only watch for an early exit; readiness is confirmed by `ensureConnectedSoon` on the socket.
+ * We never import the launcher.
  */
 export function startDaemon(bin: string, socketPath: string, onLine: (line: string) => void): Promise<number> {
 	return new Promise((resolve) => {
-		const args = ["daemon", "start", "--socket", socketPath];
+		const args = ["--mode", "daemon", "--daemon-socket", socketPath];
 		log.info(`spawning ${bin} ${args.join(" ")}`);
-		const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], env: process.env });
-		const forward = (buf: Buffer) => {
-			for (const line of buf.toString("utf8").split("\n")) if (line.trim()) onLine(line);
+		const env = { ...process.env };
+		for (const key of Object.keys(env)) if (key.startsWith("PRIME_OBSERVER_")) delete env[key];
+		const child = spawn(bin, args, { detached: true, stdio: "ignore", env });
+		let settled = false;
+		const settle = (code: number) => {
+			if (settled) return;
+			settled = true;
+			resolve(code);
 		};
-		child.stdout.on("data", forward);
-		child.stderr.on("data", forward);
 		child.on("error", (e) => {
 			onLine(`failed to spawn ${bin}: ${e.message}`);
-			resolve(127);
+			settle(127);
 		});
-		child.on("exit", (code) => resolve(code ?? 1));
+		child.on("exit", (code, signal) => {
+			onLine(`daemon supervisor exited during startup (code ${code ?? "?"}${signal ? `, signal ${signal}` : ""}); see the daemon log below`);
+			settle(code ?? 1);
+		});
+		setTimeout(() => {
+			if (settled) return;
+			child.unref();
+			onLine(`daemon supervisor started (pid ${child.pid})`);
+			settle(0);
+		}, EARLY_EXIT_MS);
 	});
 }
 

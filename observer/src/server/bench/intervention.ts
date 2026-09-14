@@ -6,7 +6,15 @@ import { isUserMessage, pathToEntry, renderTranscript, toTimeline } from "./snap
 /** Cheap prefilter; the helper decides whether the message really asks for a benchmark. */
 export const INTERVENTION_PATTERN = /\bbench\s?mark/i;
 
+/** Marker the advisor wraps every injected skill in (runner.skillBlock). */
+export const ADVISOR_MARKER = "<benchmark-skill";
+
+/**
+ * The advisor's own injections arrive as user messages and mention benchmarks; without this
+ * guard they were captured as operator requests, creating tasks from the system's own output.
+ */
 export function looksLikeIntervention(text: string): boolean {
+	if (text.includes(ADVISOR_MARKER)) return false;
 	return INTERVENTION_PATTERN.test(text);
 }
 
