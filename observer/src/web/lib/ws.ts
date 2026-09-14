@@ -145,6 +145,8 @@ function topicOf(msg: ServerMessage): Topic | undefined {
 		case "deploy.log":
 		case "deploy.done":
 			return "deploy";
+		case "bench.changed":
+			return "bench";
 		case "session.snapshot":
 		case "session.event":
 		case "session.status":

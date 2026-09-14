@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { TopBar } from "./components/TopBar.tsx";
 import { getToken, setToken } from "./lib/auth.ts";
 import { api, setUnauthorizedHandler } from "./lib/api.ts";
+import { BenchPage } from "./pages/bench/Bench.tsx";
 import { CommsPage } from "./pages/Comms.tsx";
 import { HarnessPage } from "./pages/Harness.tsx";
 import { LineagePage } from "./pages/Lineage.tsx";
@@ -62,6 +63,7 @@ export function App() {
 					<Route path="/sessions/:id" element={<SessionPage />} />
 					<Route path="/comms" element={<CommsPage />} />
 					<Route path="/harness/*" element={<HarnessPage />} />
+					<Route path="/bench/*" element={<BenchPage />} />
 					<Route path="/schedules" element={<SchedulesPage />} />
 					<Route path="/ops" element={<OpsPage />} />
 					<Route path="*" element={<div className="empty"><strong>Nothing here</strong>Unknown route.</div>} />

@@ -6,10 +6,12 @@ import type { ServerMessage } from "../../shared/ws.ts";
 import { ConfirmDialog, Eyebrow, EmptyState, ErrorLine, Json, KV, MonoId, StatusPill, TimeAgo } from "../components/common.tsx";
 import { SessionTerminal } from "../components/Terminal.tsx";
 import { api, openAuthenticated } from "../lib/api.ts";
+import { benchApi } from "../lib/bench-api.ts";
 import { modelShort, tokens, usd } from "../lib/format.ts";
 import { socket } from "../lib/ws.ts";
 import { fleetStore } from "../state/app-state.ts";
 import { useStore } from "../state/store.ts";
+import { CaptureDialog } from "./bench/Tasks.tsx";
 
 type Msg = Record<string, unknown>;
 
@@ -33,7 +35,7 @@ export function SessionPage() {
 	const [detail, setDetail] = useState<SessionDetail>();
 	const [error, setError] = useState<unknown>();
 	const [live, setLive] = useState<LiveState>(EMPTY_LIVE);
-	const [tab, setTab] = useState<"stats" | "children" | "queue" | "schedules" | "harness" | "goal">("stats");
+	const [tab, setTab] = useState<"stats" | "children" | "queue" | "schedules" | "harness" | "goal" | "bench">("stats");
 	const [confirm, setConfirm] = useState<"abort" | "kill" | undefined>();
 	const [reconnectKey, setReconnectKey] = useState(0);
 
@@ -198,7 +200,7 @@ export function SessionPage() {
 				</div>
 				<aside className="rail">
 					<div className="rail__tabs">
-						{(["stats", "children", "goal", "queue", "schedules", "harness"] as const).map((t) => (
+						{(["stats", "children", "goal", "queue", "schedules", "harness", "bench"] as const).map((t) => (
 							<button key={t} type="button" className={`rail__tab${tab === t ? " is-active" : ""}`} onClick={() => setTab(t)}>
 								{t}
 								{t === "children" && (live.children.length || node?.children.length) ? ` · ${live.children.length || node?.children.length}` : ""}
@@ -211,6 +213,7 @@ export function SessionPage() {
 					{tab === "queue" && <Json value={detail?.queue ?? { note: activeId ? "empty" : "not live" }} />}
 					{tab === "schedules" && <SchedulesPanel id={id} />}
 					{tab === "harness" && <HarnessPanel id={id} />}
+					{tab === "bench" && <BenchPanel sessionId={node?.sessionId ?? id} live={!!activeId} />}
 				</aside>
 			</div>
 			{confirm === "abort" && <ConfirmDialog title="Abort turn" body={<p>Stops the current turn. The session stays live.</p>} confirmLabel="Abort" danger onConfirm={() => void act("abort")} onCancel={() => setConfirm(undefined)} />}
@@ -473,6 +476,59 @@ function SchedulesPanel({ id }: { id: string }) {
 					<div className="small" style={{ marginTop: 4 }}>{String(j.label ?? j.prompt ?? "")}</div>
 				</div>
 			))}
+		</div>
+	);
+}
+
+/** Checkpoint benchmarks from this session: freeze a moment, mine decisions, ask the advisor. */
+function BenchPanel({ sessionId, live }: { sessionId: string; live: boolean }) {
+	const [capturing, setCapturing] = useState(false);
+	const [note, setNote] = useState<string>();
+	const [error, setError] = useState<unknown>();
+
+	async function mine() {
+		setError(undefined);
+		try {
+			await benchApi.mine(sessionId);
+			setNote("Mining started. Proposed checkpoints appear under bench, candidates.");
+		} catch (e) {
+			setError(e);
+		}
+	}
+
+	async function advise() {
+		setError(undefined);
+		try {
+			const r = await benchApi.advisorCheck(sessionId);
+			setNote(r.event ? `${r.event.action}: ${r.event.stepSummary}` : "Nothing to decide: no verified skills yet, or no new activity since the last look.");
+		} catch (e) {
+			setError(e);
+		}
+	}
+
+	return (
+		<div className="col" style={{ gap: 10 }}>
+			<ErrorLine error={error} />
+			<p className="small soft" style={{ margin: 0 }}>
+				Freeze a moment of this session as a checkpoint benchmark, or let a separate agent propose the major decisions in it.
+			</p>
+			<button type="button" className="btn btn--primary btn--small" onClick={() => setCapturing(true)}>
+				Capture a checkpoint
+			</button>
+			<button type="button" className="btn btn--small" onClick={() => void mine()}>
+				Mine checkpoints
+			</button>
+			<button type="button" className="btn btn--small" disabled={!live} onClick={() => void advise()}>
+				Ask the advisor now
+			</button>
+			{note && <div className="banner banner--info">{note}</div>}
+			<p className="tiny muted" style={{ margin: 0 }}>
+				You can also type what should have happened plus "benchmark this" into the terminal; the observer turns it into a task.
+			</p>
+			<Link className="tiny" to="/bench">
+				open bench
+			</Link>
+			{capturing && <CaptureDialog sessionId={sessionId} onClose={() => setCapturing(false)} />}
 		</div>
 	);
 }

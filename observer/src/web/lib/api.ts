@@ -115,7 +115,7 @@ export async function uploadFile(file: File, session?: string, signal?: AbortSig
 	return parsed.file as UploadedFile;
 }
 
-async function call<T>(method: string, path: string, body?: unknown, tokenOverride?: string): Promise<T> {
+export async function call<T>(method: string, path: string, body?: unknown, tokenOverride?: string): Promise<T> {
 	const token = tokenOverride ?? getToken();
 	const headers: Record<string, string> = {};
 	if (token) headers.authorization = `Bearer ${token}`;

@@ -12,6 +12,7 @@ const NAV: Array<[string, string]> = [
 	["/lineage", "lineage"],
 	["/comms", "comms"],
 	["/harness", "harness"],
+	["/bench", "bench"],
 	["/schedules", "schedules"],
 	["/ops", "ops"],
 ];
