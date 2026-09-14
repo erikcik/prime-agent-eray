@@ -17,20 +17,24 @@ if __name__=="__main__" and len(sys.argv)==1:
 #   python3 deploy/runpod-deploy.py pod <podId>           # show status + port mappings
 # The env json is {"PRIME_OBSERVER_TOKEN": "...", "NANO_GPT_API_KEY": "...", ...} (never commit it).
 def deploy(env_path, instance=None, volume=None, template=None, dc=None,
-           image=None, registry=None, name=None):
+           image=None, registry=None, name=None, disk=None):
     # Defaults target the current stack; override any of them with the matching RUNPOD_* env var
     # so a redeploy onto a new volume/image needs no edit here.
     instance = instance or os.environ.get("RUNPOD_INSTANCE", "cpu3g-4-16")
-    volume   = volume   or os.environ.get("RUNPOD_VOLUME",   "o6kytzktj0")
-    template = template or os.environ.get("RUNPOD_TEMPLATE", "mmv355evu2")
+    volume   = volume   or os.environ.get("RUNPOD_VOLUME",   "7chuik9v2b")
+    template = template or os.environ.get("RUNPOD_TEMPLATE", "")
     dc       = dc       or os.environ.get("RUNPOD_DC",       "EU-RO-1")
     image    = image    or os.environ.get("RUNPOD_IMAGE",    "ghcr.io/erikcik/prime-agent-eray:0.1.2")
     registry = registry or os.environ.get("RUNPOD_REGISTRY", "cmtgfealr000h6h832efsrbit")
     name     = name     or os.environ.get("RUNPOD_NAME",     "prime-agent-eray")
+    disk     = disk     or int(os.environ.get("RUNPOD_DISK_GB", "40"))
     env=json.load(open(env_path))
     inp={"name":name,"instanceId":instance,"imageName":image,"containerRegistryAuthId":registry,
-         "cloudType":"SECURE","dataCenterId":dc,"networkVolumeId":volume,"volumeMountPath":"/workspace","containerDiskInGb":40,
-         "ports":"8790/http,22/tcp","env":[{"key":k,"value":v} for k,v in env.items()]}
+         "cloudType":"SECURE","dataCenterId":dc,"networkVolumeId":volume,"volumeMountPath":"/workspace","containerDiskInGb":disk,
+         # 8888/http is JupyterLab (deploy/pod-jupyter.sh). RunPod fixes ports at CREATION, so a
+         # pod without it here can never serve Jupyter through the proxy — and sshd_config in the
+         # image sets AllowTcpForwarding no, which rules out reaching it over an ssh tunnel too.
+         "ports":"8790/http,8888/http,22/tcp","env":[{"key":k,"value":v} for k,v in env.items()]}
     # templateId is optional: with RUNPOD_TEMPLATE="" the image/env/ports above are the whole spec,
     # which keeps pod secrets out of a stored template. A stale template pins its own (older) image.
     if template:

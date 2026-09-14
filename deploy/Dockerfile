@@ -21,7 +21,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git openssh-client openssh-server rsync procps tini gosu xz-utils jq \
-      python3 ripgrep fd-find \
+      python3 make g++ ripgrep fd-find \
       libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libjpeg62-turbo libgif7 librsvg2-2 \
  && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
  && rm -f /etc/ssh/ssh_host_* \

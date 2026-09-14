@@ -113,6 +113,53 @@ export interface ModelPodStatus {
 	note?: string;
 }
 
+/**
+ * State of the one folder binding between the pod's /workspace and Eray's Mac.
+ *
+ * - `unbound`  no binding daemon has ever reported to this observer
+ * - `syncing`  a pass is in flight (or the daemon has only just started)
+ * - `healthy`  the last pass succeeded and the heartbeat is fresh
+ * - `failing`  the daemon is reachable but rsync is erroring
+ * - `stale`    nothing has been heard for longer than `staleAfterSec`
+ */
+export type BindingPhase = "unbound" | "syncing" | "healthy" | "failing" | "stale";
+
+/** Reported by deploy/pod-bind.py on the Mac; every field is best-effort. */
+export interface BindingHeartbeat {
+	/** The single folder on the Mac that mirrors the volume. */
+	dest: string;
+	/** Path on the pod being mirrored, normally /workspace. */
+	remote: string;
+	host?: string;
+	port?: number;
+	podId?: string;
+	activity: "syncing" | "idle";
+	lastResult?: "ok" | "error";
+	lastSyncAt?: string;
+	lastSyncDurationMs?: number;
+	filesTransferred?: number;
+	bytesTransferred?: number;
+	/** Size and file count of the local folder after the last pass. */
+	localBytes?: number;
+	localFiles?: number;
+	consecutiveFailures?: number;
+	error?: string;
+	daemonStartedAt?: string;
+	agent?: string;
+}
+
+export interface BindingStatus {
+	phase: BindingPhase;
+	/** Seconds since the last heartbeat landed; absent when none ever has. */
+	ageSec?: number;
+	lastHeartbeatAt?: string;
+	staleAfterSec: number;
+	expectedHeartbeatSec: number;
+	heartbeat?: BindingHeartbeat;
+	/** Heartbeats accepted since this observer started. */
+	beats: number;
+}
+
 export interface ApiError {
 	error: string;
 	code?: string;

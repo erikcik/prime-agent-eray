@@ -1,4 +1,5 @@
 import type {
+	BindingStatus,
 	CommsResponse,
 	CreateSessionRequest,
 	CreateSessionResponse,
@@ -190,6 +191,7 @@ export const api = {
 	daemonLog: (lines = 200) => call<{ path: string; lines: string[] }>("GET", `/api/daemon/log?lines=${lines}`),
 	deploy: () => call<{ runId: string }>("POST", "/api/deploy"),
 	deployLast: () => call<DeployRun | null>("GET", "/api/deploy/last"),
+	binding: () => call<BindingStatus>("GET", "/api/binding"),
 	modelPod: () => call<ModelPodStatus>("GET", "/api/model-pod"),
 	modelPodDeploy: () => call<ModelPodStatus>("POST", "/api/model-pod/deploy"),
 	modelPodStop: () => call<ModelPodStatus>("POST", "/api/model-pod/stop"),

@@ -47,3 +47,20 @@ export type ServerMessage =
 export function isSessionTopic(topic: string): topic is `session:${string}` {
 	return topic.startsWith("session:");
 }
+
+// ---- terminal (the real prime-agent TUI over a PTY) ----------------------------------------
+export const TERM_WS_PATH = "/ws/term";
+export const TERM_WS_PROTOCOL = "prime-observer-term.v1";
+
+/** Client → server on the terminal socket. Output flows back as raw binary frames. */
+export type TermClientMessage =
+	| { t: "auth"; token: string }
+	| { t: "open"; cols: number; rows: number }
+	| { t: "in"; data: string }
+	| { t: "resize"; cols: number; rows: number };
+
+export type TermServerMessage =
+	| { t: "hello" }
+	| { t: "ready"; pid: number; cols: number; rows: number }
+	| { t: "exit"; code: number; signal?: number }
+	| { t: "error"; message: string; code?: string };

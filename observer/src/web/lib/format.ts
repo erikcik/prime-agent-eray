@@ -53,6 +53,29 @@ export function duration(ms: number | undefined): string {
 	return `${m}m ${s % 60}s`;
 }
 
+export function bytes(n: number | undefined): string {
+	if (n === undefined || Number.isNaN(n)) return "—";
+	if (n < 1024) return `${n} B`;
+	const units = ["KB", "MB", "GB", "TB"];
+	let v = n / 1024;
+	let i = 0;
+	while (v >= 1024 && i < units.length - 1) {
+		v /= 1024;
+		i++;
+	}
+	return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+/** Seconds as a compact age, for a counter that ticks between polls. */
+export function ageSeconds(s: number | undefined): string {
+	if (s === undefined) return "—";
+	if (s < 60) return `${s}s ago`;
+	const m = Math.floor(s / 60);
+	if (m < 60) return `${m}m ${s % 60}s ago`;
+	const h = Math.floor(m / 60);
+	return `${h}h ${m % 60}m ago`;
+}
+
 export function basename(path: string | undefined): string {
 	if (!path) return "";
 	return path.split("/").filter(Boolean).pop() ?? path;

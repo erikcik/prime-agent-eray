@@ -8,6 +8,9 @@ import type {
 	HealthResponse,
 	MessagesPage,
 	ModelsResponse,
+	RewindPointsResponse,
+	RewindRequest,
+	RewindResponse,
 	SchedulesResponse,
 	SessionDetail,
 } from "../../shared/api.ts";
@@ -15,9 +18,11 @@ import type { RefinementResult } from "../../shared/harness.ts";
 import type { CommsIndex } from "../comms/comms-index.ts";
 import type { DaemonBridge } from "../daemon/bridge.ts";
 import type { DaemonCommands } from "../daemon/commands.ts";
+import { type FlatTreeNode, rewindPointsForBranch } from "../daemon/rewind.ts";
 import { daemonLogTail, ensureConnectedSoon, startDaemon } from "../daemon/lifecycle.ts";
 import type { SessionStreamer } from "../daemon/session-streamer.ts";
 import type { DeployRunner } from "../deploy/runner.ts";
+import type { BindingService } from "../binding/service.ts";
 import type { ModelPodService } from "../model-pod/service.ts";
 import { readSessionArtifacts } from "../disk/artifacts-reader.ts";
 import { buildHarnessView } from "../disk/harness-reader.ts";
@@ -41,6 +46,7 @@ export interface RouteDeps {
 	comms: CommsIndex;
 	deploy: DeployRunner;
 	modelPod: ModelPodService;
+	binding: BindingService;
 	exporter: HtmlExporter;
 	hub: Hub;
 	serverStartedAt: string;
@@ -103,6 +109,16 @@ export function registerRoutes(r: Router, d: RouteDeps): void {
 		const s = await d.modelPod.stop();
 		d.hub.publish("deploy", { t: "deploy.log", runId: "model-pod", line: `model pod stopped`, stream: "out", at: new Date().toISOString() });
 		return s;
+	});
+
+	// ---- folder binding (Mac <- /workspace) ------------------------------------------------
+	// The daemon on the Mac POSTs here; the UI reads the GET. Both sit behind the same bearer
+	// token as every other route, so the heartbeat cannot be forged by anything that could not
+	// already drive the whole observer.
+	r.get("/api/binding", () => d.binding.status());
+
+	r.post("/api/binding/heartbeat", async (ctx) => {
+		return await d.binding.accept(await ctx.body<unknown>());
 	});
 
 	r.get("/api/fleet", () => d.fleet.current());
@@ -334,6 +350,34 @@ export function registerRoutes(r: Router, d: RouteDeps): void {
 		return { ok: true, from: sender };
 	});
 
+	// ---- rewind ----------------------------------------------------------------------------
+	// Claude Code's Esc-Esc: list the user messages on the current branch, pick one, and the
+	// harness moves the session leaf to just before it (navigate_tree). Nothing is deleted:
+	// the abandoned turns stay in the session file as a sibling branch, optionally summarized.
+	r.get("/api/sessions/:id/rewind-points", async (ctx): Promise<RewindPointsResponse> => {
+		const activeSessionId = requireLiveId(d, ctx.params.id ?? "", ctx.query.get("activeSessionId") ?? undefined);
+		const tree = await d.commands.getSessionTree(activeSessionId);
+		return { points: rewindPointsForBranch(tree.flatNodes as FlatTreeNode[], tree.leafId), leafId: tree.leafId, activeSessionId };
+	});
+
+	r.post("/api/sessions/:id/rewind", async (ctx): Promise<RewindResponse> => {
+		const body = await ctx.body<RewindRequest>();
+		if (!body.entryId?.trim()) throw new HttpError(400, "entryId is required");
+		const activeSessionId = requireLiveId(d, ctx.params.id ?? "", body.activeSessionId);
+		const result = await d.commands.navigateTree(activeSessionId, body.entryId, { summarize: body.summarize === true });
+		if (!result.cancelled) {
+			// The daemon does not necessarily replay a snapshot to watchers after a branch change,
+			// so refresh every open viewer from the source of truth rather than trusting an event.
+			try {
+				const [state, messages] = await Promise.all([d.commands.getState(activeSessionId), d.commands.getMessages(activeSessionId)]);
+				d.streamer.replace(activeSessionId, state, messages.messages);
+			} catch {
+				// Viewers will pick it up on their next snapshot; the rewind itself succeeded.
+			}
+		}
+		return { ok: true, cancelled: result.cancelled, aborted: result.aborted, editorText: result.editorText, summarized: !!result.summaryEntry };
+	});
+
 	r.post("/api/sessions/:id/export.html", async (ctx) => {
 		const node = requireNode(d, ctx.params.id ?? "");
 		let path: string;
@@ -525,6 +569,18 @@ function requireNode(d: RouteDeps, id: string) {
 	const node = d.fleet.findNode(id);
 	if (!node) throw new HttpError(404, `unknown session ${id}`);
 	return node;
+}
+
+/**
+ * The live id for a session, accepting a caller-supplied one for the window right after a
+ * resume when the fleet scan has not yet attached activeSessionId to the node.
+ */
+function requireLiveId(d: RouteDeps, id: string, override?: string): string {
+	const node = requireNode(d, id);
+	if (!d.bridge.current) throw new HttpError(503, "daemon offline", "daemon_offline");
+	const live = node.activeSessionId ?? override?.trim();
+	if (!live) throw new HttpError(409, "session is not live; resume it first", "session_not_live", { sessionFile: node.sessionFile });
+	return live;
 }
 
 function requireLive(d: RouteDeps, id: string) {

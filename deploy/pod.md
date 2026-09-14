@@ -30,7 +30,7 @@ create-pod
     NANO_GPT_API_KEY          NanoGPT key
     ANTHROPIC_OAUTH_TOKEN     sk-ant-oat01-… from `claude setup-token` (optional)
     DEPLOY_GIT_SSH_KEY        contents of ~/.ssh/prime-agent-eray-deploy (read-only deploy key)
-    PUBLIC_KEY                contents of ~/.ssh/lh-harness-pod.pub (enables sshd for the mirror)
+    PUBLIC_KEY                contents of ~/.ssh/prime-agent-pod.pub (enables sshd for the mirror)
 ```
 Never pass `volumeInGb` with `networkVolumeId`. Leave the start command empty (image CMD = `serve`).
 
@@ -49,7 +49,7 @@ Never pass `volumeInGb` with `networkVolumeId`. Leave the start command empty (i
 | terminate → new pod, same volume | identical; ssh host key fingerprint unchanged |
 | Refresh (UI-only commit) | UI updates in seconds; a running agent keeps streaming |
 | Refresh (packages/ commit) | hook warns about daemon restart; refuses while agents work unless forced |
-| mirror | `deploy/pod-mirror.sh --host <ip> --port <p> ~/Desktop/prime-agent-pod` shows `/workspace` locally |
+| binding | `deploy/pod-bind.py --pod <id> --install` mirrors `/workspace` into `~/Desktop/prime-agent-pod`; Ops page shows it live |
 
 ## Deploy (current route)
 
@@ -62,16 +62,16 @@ python3 deploy/runpod-deploy.py pod <podId>   # status + port mappings (22 -> pu
 `runpod-deploy.py` defaults to the live stack below; override any of them per-run with
 `RUNPOD_VOLUME`, `RUNPOD_TEMPLATE`, `RUNPOD_IMAGE`, `RUNPOD_INSTANCE`, `RUNPOD_DC`, `RUNPOD_NAME`.
 
-## Live ids (2026-09-03, second deployment)
+## Live ids (2026-09-09, third deployment — clean slate)
 
 | thing | id |
 |---|---|
-| network volume `prime-agent-eray-vol2` (EU-RO-1, 50 GB) | `o6kytzktj0` |
+| network volume `prime-agent-eray-vol` (EU-RO-1, 50 GB) | `7chuik9v2b` (created 2026-09-09; `o6kytzktj0` and everything on it was deleted) |
 | template | **none** — deployed templateless, so no pod secret is stored in a RunPod template |
-| pod `prime-agent-eray` (cpu3g-4-16, $0.16/h) | `7vdq4vlyte1lpe` → https://7vdq4vlyte1lpe-8790.proxy.runpod.net (4th pod on this volume; predecessors `dcmhshd4c18p5k`, `1l09kubkzyeo4t`, `4mczeltz3kgimr`) |
+| pod `prime-agent-eray` | see `deploy/.binding.json` / the Ops page; nothing survived the wipe |
 | image | `ghcr.io/erikcik/prime-agent-eray:0.1.2` (= `latest`, digest `sha256:8010d870…`) |
-| mirror | `~/Desktop/prime-agent-pod2` (`--host 213.173.105.68 --port 49675`, remapped on every restart) |
-| ssh host key (volume 2) | `SHA256:E+u9r616JmLpjNRekspP0GRyLURwOGowYE3+vV+eH9Q` |
+| binding | the ONE folder `~/Desktop/prime-agent-pod`, driven by `deploy/pod-bind.py` (launchd, pull-only) |
+| mirror ssh key | `~/.ssh/prime-agent-pod` (fresh 2026-09-09; the borrowed `lh-harness-pod` key is no longer used here) |
 
 `deployCpuPod` accepts the full spec without `templateId` (imageName + containerRegistryAuthId +
 ports + env + containerDiskInGb), which is preferable: a template would otherwise persist the
@@ -112,7 +112,7 @@ Image `0.1.2` over `0.1.1`: the entrypoint now seeds `settings.json` on a fresh 
 |---|---|---|
 | network volume `prime-agent-eray-vol` | `y0n17rf3mc` | deleted (content had been mirrored to `~/Desktop/prime-agent-pod`) |
 | pod `prime-agent-eray` | `hzymwdbv6iy7nc` | deleted (first pod `26qbk1ihcmfsmh` crash-looped: deploy key on the volume read back 0666) |
-| template `prime-agent-eray` | `mmv355evu2` | **still exists** — pins image 0.1.1 and stores the old observer token, NanoGPT key and deploy key. Delete it, or treat those as live secrets. |
+| template `prime-agent-eray` | `mmv355evu2` | **still exists** — pins image 0.1.1 and stores the old observer token, NanoGPT key, deploy key and the retired `lh-harness` pubkey. Deleting it was blocked by a local permission classifier on 2026-09-09; delete it in the RunPod console, or treat those as live secrets. |
 | image | `ghcr.io/erikcik/prime-agent-eray:0.1.1` | still in GHCR |
 
 **How the pod was actually created.** Neither the `runpod` MCP `create-pod` tool nor `runpodctl pod create`

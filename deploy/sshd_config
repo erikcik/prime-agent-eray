@@ -1,4 +1,4 @@
-# sshd for the pod's file-mirror channel (deploy/pod-mirror.sh). Key-only, single user, no forwarding.
+# sshd for the pod's file-mirror channel (deploy/pod-bind.py). Key-only, single user, no forwarding.
 Port 22
 AddressFamily inet
 HostKey /etc/ssh/ssh_host_ed25519_key

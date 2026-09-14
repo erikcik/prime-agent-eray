@@ -839,3 +839,59 @@
 	background: var(--tint);
 	font-size: 13px;
 }
+
+/* ---- terminal (the real TUI) ------------------------------------------------------------- */
+.term {
+	position: relative;
+	height: max(480px, calc(100vh - 210px));
+	border: var(--hair);
+	border-radius: var(--r-card);
+	background: #0f0f0f; /* always dark: see TERM_THEME in components/Terminal.tsx */
+	overflow: hidden;
+}
+.term__host {
+	position: absolute;
+	inset: 0;
+}
+/* Padding lives on xterm's own element: the fit addon subtracts that element's padding when
+   sizing the grid, but not the host's, so host padding would let it pick one row too many. */
+.term__host .xterm {
+	height: 100%;
+	padding: 8px 4px 8px 10px;
+}
+.term__host .xterm .xterm-viewport {
+	background: transparent !important;
+}
+.term__overlay {
+	position: absolute;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	background: rgba(15, 15, 15, 0.85);
+	backdrop-filter: blur(2px);
+}
+.term__overlay--quiet {
+	pointer-events: none;
+	background: transparent;
+	backdrop-filter: none;
+	align-items: end;
+	padding-bottom: 12px;
+}
+.term__notice {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 10px;
+	padding: 18px 22px;
+	border: var(--hair);
+	border-radius: var(--r-card);
+	background: var(--paper);
+	max-width: 420px;
+	text-align: center;
+}
+.term-help {
+	display: flex;
+	gap: 14px;
+	flex-wrap: wrap;
+	margin-top: 8px;
+}

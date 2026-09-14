@@ -5,9 +5,8 @@ daemon over its unix socket (public exports of `@earendil-works/pi-coding-agent`
 on-disk session and Continual Harness state.
 
 Pages: **signal** (fleet counters, family boards, live ticker, new session), **lineage** (RLM spawn
-tree incl. deleted children), **session** inspector (live transcript with ipython call/result
-blocks, prompt/steer/follow-up, abort/kill, stats, children, goal, queue, schedules, local
-harness), **comms** (agent-to-agent messages), **harness** (entries by kind, refinement history
+tree incl. deleted children), **session** page (the real `prime-agent` terminal attached to the
+session, plus abort/kill, stats, children, goal, queue, schedules, local harness), **comms** (agent-to-agent messages), **harness** (entries by kind, refinement history
 with before/after diffs and rollback, installed skills with rendered SKILL.md), **schedules**
 (cron + heartbeats), **ops** (versions, daemon start/restart/shutdown, deploy console, daemon log).
 The **Redeploy** button runs `deploy/refresh.sh` and restarts the observer (exit code 87).
@@ -43,11 +42,28 @@ npm run check && npm test
 Tests use `test/fixtures/agent-dir` (paths carry a `__AGENT_DIR__` placeholder materialized into a
 temp dir) and boot the real server with the daemon offline.
 
+## Session terminal
+
+The session page does not re-implement the transcript. It hosts the harness's own TUI: the
+observer spawns `prime-agent --resume <session file>` in a PTY (node-pty) and streams the bytes to
+an xterm.js view over `GET /ws/term?session=<id>` (bearer in the WebSocket subprotocol, same origin
+allow-list as `/ws`). When the session is live the TUI attaches to the resident worker; when it is
+saved it resumes it. Closing the page kills the TUI process only, never the agent. Every TUI
+behaviour is therefore the harness's: Esc Esc / `/tree` for branch navigation, `/fork`, Ctrl+O and
+Ctrl+T for tool output and thinking, Ctrl+C to abort, steering by typing mid-turn.
+
+- The PTY runs `PRIME_OBSERVER_PRIME_AGENT_BIN` with `--daemon-socket` when the observer has one,
+  in the session's cwd (falling back to the repo root), with `PRIME_AGENT_CODING_AGENT_DIR` set and
+  the observer's own secrets stripped from the environment.
+- At most 8 terminals at once (each TUI is a ~200 MB Node process); the ninth is refused with
+  close code 4429.
+- `node-pty` ships no Linux prebuild, so the image installs `make` and `g++`; `npm ci` compiles it.
+
 ## Composer attachments
 
-The session composer can attach files. Each one is streamed to `<session cwd>/inbox/<name>` and the
-outgoing message gains a trailing block listing the cwd-relative paths, because the model only ever
-sees the message text:
+**Attach files** under the terminal streams each file to `<session cwd>/inbox/<name>` and shows the
+cwd-relative path, which you then mention in the terminal like any other path (the model only ever
+sees message text):
 
 ```
 Attached files (already uploaded to this session's `inbox/` folder; open them with these

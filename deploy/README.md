@@ -42,8 +42,11 @@ pod (container, uid 1000)                     network volume  /workspace
   to `PRIME_OBSERVER_ALLOWED_ORIGINS` (idempotently) rather than only setting it when empty — a
   value left over from the local compose rehearsal (`127.0.0.1:8791`) would otherwise shadow the
   proxy origin and the UI's WebSocket would be rejected.
-* **Mirror** (`deploy/pod-mirror.sh`): rsync-over-ssh pull loop of `/workspace` into
-  `~/Desktop/prime-agent-pod` on the Mac. SSH port is remapped by RunPod on every restart.
+* **Binding** (`deploy/pod-bind.py`): the one folder binding. A launchd daemon on the Mac runs a
+  pull-only rsync-over-ssh loop of `/workspace` into `~/Desktop/prime-agent-pod` every 60 s, and
+  POSTs a heartbeat to `/api/binding/heartbeat` every 30 s so the observer's Ops page can show
+  whether the binding is alive. RunPod remaps the ssh port on every restart, so the daemon
+  re-resolves the endpoint whenever a pass fails.
 
 ## Build and push the image
 
@@ -77,7 +80,8 @@ Inside the container the provider smoke test is
    Never set `volumeInGb` together with `networkVolumeId`. Leave the start command empty.
 3. Open `https://<POD_ID>-8790.proxy.runpod.net`, paste the token. First boot takes a few minutes
    (clone + build); the pod log shows `listening on http://0.0.0.0:8790`.
-4. Mirror: `deploy/pod-mirror.sh --host <ip> --port <mapped 22> ~/Desktop/prime-agent-pod`.
+4. Binding: `deploy/pod-bind.py --pod <POD_ID> --install` (once; it remembers the pod and
+   survives reboots). Check it on the Ops page, or with `deploy/pod-bind.py --status`.
 
 Stop the pod when idle; the volume keeps everything (sessions resume after start or after a new
 pod on the same volume). See `deploy/pod.md` for the exact create calls and stress-test results.

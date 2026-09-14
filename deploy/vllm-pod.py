@@ -153,7 +153,7 @@ def _is_supply_error(res: dict) -> bool:
 
 def deploy(env_path: str | None = None) -> dict:
     dc = os.environ.get("VLLM_DC", "EU-RO-1")
-    volume = os.environ.get("VLLM_VOLUME", "o6kytzktj0")
+    volume = os.environ.get("VLLM_VOLUME", "7chuik9v2b")
     name = os.environ.get("VLLM_POD_NAME", "prime-agent-vllm")
     image = os.environ.get("VLLM_IMAGE", "vllm/vllm-openai:nightly")
 

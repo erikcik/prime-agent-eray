@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog, Eyebrow, ErrorLine, KV } from "../components/common.tsx";
 import { api } from "../lib/api.ts";
-import { dateTime } from "../lib/format.ts";
+import { ageSeconds, bytes, dateTime, duration } from "../lib/format.ts";
 import { daemonStore, deployStore, refreshHealth, socketStore, versionStore } from "../state/app-state.ts";
 import { useStore } from "../state/store.ts";
 
@@ -17,6 +17,11 @@ export function OpsPage() {
 	const [busy, setBusy] = useState(false);
 	const [lastDeploy, setLastDeploy] = useState<Awaited<ReturnType<typeof api.deployLast>>>();
 	const [pod, setPod] = useState<Awaited<ReturnType<typeof api.modelPod>>>();
+	const [bind, setBind] = useState<Awaited<ReturnType<typeof api.binding>>>();
+	// Age is rebased on the local clock at every response, so the counter can tick between polls
+	// without trusting the Mac's clock to agree with the pod's.
+	const bindFetchedAt = useRef(Date.now());
+	const [, setBindTick] = useState(0);
 
 	const loadLog = useCallback(async () => {
 		try {
@@ -68,6 +73,30 @@ export function OpsPage() {
 		};
 	}, [loadPod]);
 
+	// The binding lives on Eray's Mac, which the observer cannot reach, so the heartbeat is the only
+	// evidence it has. Polling once a minute against a 30 s heartbeat means a binding that dies is
+	// on screen as "stale" within roughly two missed beats.
+	const loadBinding = useCallback(async () => {
+		try {
+			const b = await api.binding();
+			bindFetchedAt.current = Date.now();
+			setBind(b);
+		} catch {
+			// Keep the last known state: the age below keeps climbing regardless, so a binding that
+			// really has stopped still turns stale rather than freezing on a reassuring "healthy".
+		}
+	}, []);
+
+	useEffect(() => {
+		void loadBinding();
+		const poll = setInterval(() => void loadBinding(), 60_000);
+		const tick = setInterval(() => setBindTick((n) => n + 1), 1000);
+		return () => {
+			clearInterval(poll);
+			clearInterval(tick);
+		};
+	}, [loadBinding]);
+
 	// After a successful deploy the server exits 87; poll health until it is back, then reload.
 	const restartingRef = useRef(false);
 	useEffect(() => {
@@ -112,6 +141,13 @@ export function OpsPage() {
 			setBusy(false);
 		}
 	}
+
+	// Age is the server's number plus however long we have been holding the response, which needs no
+	// agreement between the Mac's clock and the pod's.
+	const bindAge = bind?.ageSec === undefined ? undefined : bind.ageSec + Math.floor((Date.now() - bindFetchedAt.current) / 1000);
+	const bindPhase = bind ? (bindAge !== undefined && bindAge > bind.staleAfterSec ? "stale" : bind.phase) : undefined;
+	const bindPill = bindPhase === "healthy" ? "pill--ink" : bindPhase === "stale" || bindPhase === "failing" ? "pill--fail" : bindPhase === "syncing" ? "pill--live" : "";
+	const hb = bind?.heartbeat;
 
 	const phases = deploy.lines.filter((l) => l.startsWith("::phase ")).map((l) => l.slice(8));
 
@@ -193,6 +229,38 @@ export function OpsPage() {
 								Stop model
 							</button>
 						</div>
+					</div>
+				</section>
+				<section className="card">
+					<header className="card__head">
+						<Eyebrow ink>folder binding</Eyebrow>
+						<span className={`pill ${bindPill}`}>{bindPhase ?? "…"}</span>
+					</header>
+					<div className="card__body col" style={{ gap: 10 }}>
+						<KV k="mac folder" v={hb?.dest ?? "—"} mono />
+						<KV k="pod path" v={hb?.remote ?? "/workspace"} mono />
+						<KV k="over ssh" v={hb?.host ? `${hb.host}:${hb.port ?? "?"}` : "—"} mono />
+						<KV k="last heartbeat" v={ageSeconds(bindAge)} mono />
+						<KV k="last sync" v={hb?.lastSyncAt ? `${dateTime(hb.lastSyncAt)} · ${duration(hb.lastSyncDurationMs)}` : "—"} mono />
+						<KV k="local copy" v={hb?.localBytes !== undefined ? `${bytes(hb.localBytes)} · ${hb.localFiles ?? "?"} files` : "—"} mono />
+						<KV k="last transfer" v={hb?.bytesTransferred !== undefined ? `${bytes(hb.bytesTransferred)} · ${hb.filesTransferred ?? 0} files` : "—"} mono />
+						{!!hb?.consecutiveFailures && <KV k="failed passes" v={hb.consecutiveFailures} mono />}
+						{bindPhase === "unbound" && (
+							<div className="mono tiny muted">
+								No binding daemon has ever reported here. Start it on the Mac with <code>deploy/pod-bind.py --install</code>.
+							</div>
+						)}
+						{bindPhase === "stale" && (
+							<div className="mono tiny err">
+								Nothing heard for over {bind?.staleAfterSec ?? 120}s. The Mac may be asleep or offline, or the binding daemon has stopped — the local folder is no longer tracking the volume.
+							</div>
+						)}
+						{hb?.error && (
+							<div className="mono tiny err" style={{ whiteSpace: "pre-wrap", maxHeight: 140, overflowY: "auto" }}>
+								{hb.error}
+							</div>
+						)}
+						<div className="mono tiny muted">Pull-only: the pod writes, the Mac folder follows. Nothing local is ever pushed up or deleted.</div>
 					</div>
 				</section>
 				<section className="card" style={{ gridColumn: "1 / -1" }}>

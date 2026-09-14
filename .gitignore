@@ -48,3 +48,6 @@ __pycache__/
 deploy/.env
 deploy/.pod-snapshot.json
 deploy/.vllm-token
+deploy/.jupyter-token
+deploy/.binding.json
+deploy/.binding.log

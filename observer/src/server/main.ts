@@ -2,13 +2,14 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { VERSION as HARNESS_VERSION } from "@earendil-works/pi-coding-agent";
-import type { ServerMessage } from "../shared/ws.ts";
+import { TERM_WS_PATH, type ServerMessage } from "../shared/ws.ts";
 import { hasQueryToken, httpAuthorized } from "./auth.ts";
 import { CommsIndex } from "./comms/comms-index.ts";
 import { DaemonBridge } from "./daemon/bridge.ts";
 import { DaemonCommands } from "./daemon/commands.ts";
 import { SessionStreamer } from "./daemon/session-streamer.ts";
 import { DeployRunner, RESTART_EXIT_CODE } from "./deploy/runner.ts";
+import { BindingService } from "./binding/service.ts";
 import { ModelPodService } from "./model-pod/service.ts";
 import { agentPaths } from "./disk/paths.ts";
 import { AgentDirWatcher } from "./disk/watcher.ts";
@@ -16,6 +17,7 @@ import { loadEnv } from "./env.ts";
 import { HtmlExporter } from "./export/html-export.ts";
 import { FleetService } from "./fleet/fleet-service.ts";
 import { Router, sendJson } from "./http/router.ts";
+import { TerminalHub } from "./terminal/terminal-hub.ts";
 import { registerRoutes } from "./http/routes.ts";
 import { serveStatic } from "./http/static.ts";
 import { logger } from "./log.ts";
@@ -89,6 +91,21 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		},
 	});
 
+	// The session page hosts the real TUI: one PTY per open terminal, resuming the session file.
+	const terminals = new TerminalHub({
+		token: env.token,
+		insecureLocal: env.insecureLocal,
+		allowedOrigins: env.allowedOrigins,
+		primeAgentBin: env.primeAgentBin,
+		daemonSocket: env.daemonSocket,
+		agentDir: env.agentDir,
+		fallbackCwd: env.repoRoot,
+		resolveTarget: (id) => {
+			const node = fleet.findNode(id);
+			return node?.sessionFile ? { sessionFile: node.sessionFile, cwd: node.cwd } : undefined;
+		},
+	});
+
 	const deploy = new DeployRunner({
 		hookPath: env.deployHook,
 		repoRoot: env.repoRoot,
@@ -114,6 +131,10 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		onLine: (line) => hub.publish("deploy", { t: "deploy.log", runId: "model-pod", line, stream: "out", at: new Date().toISOString() }),
 	});
 
+	// The Mac folder binding. Purely a receiver: the daemon on the Mac calls in, because the
+	// observer has no route back to a laptop behind a home NAT.
+	const binding = new BindingService({ dataDir: env.dataDir });
+
 	fleet.onTree((tree) => hub.publish("fleet", { t: "fleet.snapshot", tree }));
 	bridge.subscribe({ onState: (info) => hub.publish("daemon", { t: "daemon.state", daemon: info }) });
 	watcher.onChange((events) => {
@@ -133,6 +154,7 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		comms,
 		deploy,
 		modelPod,
+		binding,
 		exporter,
 		hub,
 		serverStartedAt,
@@ -167,17 +189,17 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 	server.keepAliveTimeout = 72_000;
 
 	server.on("upgrade", (req, socket, head) => {
-		if ((req.url ?? "").split("?")[0] !== "/ws") {
-			socket.destroy();
-			return;
-		}
-		hub.handleUpgrade(req, socket, head as Buffer);
+		const path = (req.url ?? "").split("?")[0];
+		if (path === "/ws") hub.handleUpgrade(req, socket, head as Buffer);
+		else if (path === TERM_WS_PATH) terminals.handleUpgrade(req, socket, head as Buffer);
+		else socket.destroy();
 	});
 
 	async function shutdown(exitCode: number): Promise<void> {
 		if (shuttingDown) return;
 		shuttingDown = true;
 		hub.closeAll(1012, "restarting");
+		terminals.closeAll(1012, "restarting");
 		watcher.stop();
 		bridge.stop();
 		await new Promise<void>((resolve) => server.close(() => resolve()));

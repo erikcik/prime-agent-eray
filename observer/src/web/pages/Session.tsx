@@ -1,41 +1,41 @@
-import DOMPurify from "dompurify";
-import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { SessionDetail } from "../../shared/api.ts";
 import type { HarnessView } from "../../shared/harness.ts";
 import type { ServerMessage } from "../../shared/ws.ts";
 import { ConfirmDialog, Eyebrow, EmptyState, ErrorLine, Json, KV, MonoId, StatusPill, TimeAgo } from "../components/common.tsx";
+import { SessionTerminal } from "../components/Terminal.tsx";
 import { api, openAuthenticated } from "../lib/api.ts";
-import { sendWithRecovery } from "../lib/send.ts";
-import { clock, dateTime, modelShort, textOf, tokens, usd } from "../lib/format.ts";
+import { modelShort, tokens, usd } from "../lib/format.ts";
 import { socket } from "../lib/ws.ts";
 import { fleetStore } from "../state/app-state.ts";
 import { useStore } from "../state/store.ts";
 
 type Msg = Record<string, unknown>;
 
+/** What the right rail needs from the live stream; the transcript itself is the TUI's. */
 interface LiveState {
-	messages: Msg[];
-	streaming?: Msg;
+	streaming: boolean;
 	children: unknown[];
 	recap?: string;
 	state?: Record<string, unknown>;
 	connection?: string;
 	closed?: string;
+	/** Bumps when a message lands so the stats panel refetches. */
+	landed: number;
 }
+
+const EMPTY_LIVE: LiveState = { streaming: false, children: [], landed: 0 };
 
 export function SessionPage() {
 	const { id = "" } = useParams();
 	const fleet = useStore(fleetStore);
 	const [detail, setDetail] = useState<SessionDetail>();
 	const [error, setError] = useState<unknown>();
-	const [live, setLive] = useState<LiveState>({ messages: [], children: [] });
-	const [diskMessages, setDiskMessages] = useState<{ messages: Msg[]; hasMore: boolean; offset: number; total: number }>();
-	const [follow, setFollow] = useState(true);
+	const [live, setLive] = useState<LiveState>(EMPTY_LIVE);
 	const [tab, setTab] = useState<"stats" | "children" | "queue" | "schedules" | "harness" | "goal">("stats");
 	const [confirm, setConfirm] = useState<"abort" | "kill" | undefined>();
-	const bottomRef = useRef<HTMLDivElement>(null);
+	const [reconnectKey, setReconnectKey] = useState(0);
 
 	const node = useMemo(() => {
 		if (!fleet) return undefined;
@@ -64,24 +64,16 @@ export function SessionPage() {
 		void loadDetail();
 	}, [loadDetail, activeId]);
 
-	// Disk transcript when not live (or as the initial page before the snapshot).
-	useEffect(() => {
-		if (activeId) return;
-		void api
-			.messages(id, { limit: 200 })
-			.then((p) => setDiskMessages({ messages: p.messages as Msg[], hasMore: p.hasMore, offset: p.offset, total: p.total }))
-			.catch(setError);
-	}, [id, activeId]);
-
-	// Live stream.
+	// Live stream, kept only for the rail (stats, children, goal, recap). Messages are not
+	// accumulated here: the terminal shows the transcript the way the harness renders it.
 	useEffect(() => {
 		if (!activeId) return;
-		setLive({ messages: [], children: [] });
+		setLive(EMPTY_LIVE);
 		return socket.subscribe(`session:${activeId}`, (m: ServerMessage) => {
 			switch (m.t) {
 				case "session.snapshot": {
-					const s = m.snapshot as { messages: Msg[]; streamingMessage?: Msg; children: unknown[]; recap?: string; state?: Record<string, unknown> };
-					setLive({ messages: s.messages, streaming: s.streamingMessage, children: s.children, recap: s.recap, state: s.state });
+					const s = m.snapshot as { streamingMessage?: Msg; children: unknown[]; recap?: string; state?: Record<string, unknown> };
+					setLive((prev) => ({ ...prev, streaming: !!s.streamingMessage, children: s.children, recap: s.recap, state: s.state }));
 					break;
 				}
 				case "session.event":
@@ -108,30 +100,11 @@ export function SessionPage() {
 		});
 	}, [activeId]);
 
-	const messages = activeId ? live.messages : (diskMessages?.messages ?? []);
-	useEffect(() => {
-		if (follow) bottomRef.current?.scrollIntoView({ block: "end" });
-	}, [messages.length, live.streaming, follow]);
-
-	async function loadEarlier() {
-		if (!diskMessages?.hasMore) return;
-		const p = await api.messages(id, { before: diskMessages.offset, limit: 200 });
-		setDiskMessages({ messages: [...(p.messages as Msg[]), ...diskMessages.messages], hasMore: p.hasMore, offset: p.offset, total: p.total });
-	}
-
 	async function act(kind: "abort" | "kill") {
 		setConfirm(undefined);
 		try {
 			if (kind === "abort") await api.abort(id);
 			else await api.kill(id);
-		} catch (e) {
-			setError(e);
-		}
-	}
-
-	async function resume() {
-		try {
-			await api.resumeSession(id);
 		} catch (e) {
 			setError(e);
 		}
@@ -147,10 +120,11 @@ export function SessionPage() {
 	}
 
 	const status = node?.status ?? "inactive";
-	const isStreaming = !!live.streaming || node?.isStreaming;
+	const isStreaming = live.streaming || node?.isStreaming;
 	const stateRec = live.state ?? (detail?.state as Record<string, unknown> | undefined);
 	const modelObj = stateRec?.model as { provider?: string; id?: string } | undefined;
 	const model = modelObj?.id ? `${modelObj.provider}/${modelObj.id}` : node?.model;
+	const hasTranscript = !!node?.sessionFile;
 
 	return (
 		<>
@@ -165,9 +139,9 @@ export function SessionPage() {
 						</Link>
 					)}
 					<div className="row" style={{ marginLeft: "auto" }}>
-						{!activeId && node?.sessionFile && (
-							<button type="button" className="btn btn--small btn--primary" onClick={() => void resume()}>
-								Resume
+						{hasTranscript && (
+							<button type="button" className="btn btn--small" title="Detach this terminal and attach a fresh one" onClick={() => setReconnectKey((n) => n + 1)}>
+								Reattach
 							</button>
 						)}
 						<button type="button" className="btn btn--small" onClick={() => void exportHtml()}>
@@ -203,20 +177,24 @@ export function SessionPage() {
 			<ErrorLine error={error} />
 			<div className="inspector">
 				<div>
-					{!activeId && diskMessages?.hasMore && (
-						<button type="button" className="btn btn--small" style={{ marginBottom: 10 }} onClick={() => void loadEarlier()}>
-							Load earlier ({diskMessages.offset} more)
-						</button>
+					{hasTranscript ? <SessionTerminal sessionId={node?.sessionId ?? id} reconnectKey={reconnectKey} /> : <EmptyState title="No transcript yet">This session has no file on disk to attach to.</EmptyState>}
+					{hasTranscript && (
+						<>
+							<div className="term-help tiny muted">
+								<span>
+									<span className="kbd">esc</span> <span className="kbd">esc</span> tree / rewind
+								</span>
+								<span>
+									<span className="kbd">/tree</span> <span className="kbd">/fork</span> <span className="kbd">/usage</span> harness commands
+								</span>
+								<span>
+									<span className="kbd">ctrl</span>+<span className="kbd">c</span> abort turn
+								</span>
+								<span>Closing this page detaches the terminal; the agent keeps running.</span>
+							</div>
+							<AttachStrip id={id} />
+						</>
 					)}
-					<div className="transcript">
-						{messages.length === 0 && !live.streaming && <EmptyState title="No messages yet" />}
-						{messages.map((m, i) => (
-							<MessageBlock key={i} message={m} />
-						))}
-						{live.streaming && <MessageBlock message={live.streaming} streaming />}
-						<div ref={bottomRef} />
-					</div>
-					{(activeId || node?.sessionFile) && <Composer id={id} streaming={!!isStreaming} live={!!activeId} follow={follow} setFollow={setFollow} />}
 				</div>
 				<aside className="rail">
 					<div className="rail__tabs">
@@ -227,7 +205,7 @@ export function SessionPage() {
 							</button>
 						))}
 					</div>
-					{tab === "stats" && <StatsPanel id={id} live={!!activeId} state={stateRec} node={node} />}
+					{tab === "stats" && <StatsPanel id={id} live={!!activeId} streaming={!!isStreaming} refreshKey={live.landed} state={stateRec} node={node} />}
 					{tab === "children" && <ChildrenPanel liveChildren={live.children} node={node} />}
 					{tab === "goal" && <GoalPanel goal={(stateRec?.goal as Record<string, unknown> | undefined) ?? (detail?.goal as Record<string, unknown> | undefined)} status={detail?.agentStatus} />}
 					{tab === "queue" && <Json value={detail?.queue ?? { note: activeId ? "empty" : "not live" }} />}
@@ -249,11 +227,9 @@ function parentIdFromKey(key: string): string {
 function applyEvent(prev: LiveState, e: Msg): LiveState {
 	switch (e.type) {
 		case "message_start":
-			return { ...prev, streaming: e.message as Msg };
-		case "message_update":
-			return { ...prev, streaming: (e.message as Msg) ?? prev.streaming };
+			return { ...prev, streaming: true };
 		case "message_end":
-			return { ...prev, streaming: undefined, messages: e.message ? [...prev.messages, e.message as Msg] : prev.messages };
+			return { ...prev, streaming: false, landed: prev.landed + 1 };
 		case "rlm_child_update": {
 			const child = e.child as { id: string };
 			const idx = prev.children.findIndex((c) => (c as { id: string }).id === child.id);
@@ -266,153 +242,10 @@ function applyEvent(prev: LiveState, e: Msg): LiveState {
 			return { ...prev, recap: e.recap as string | undefined };
 		case "goal_update":
 			return { ...prev, state: { ...(prev.state ?? {}), goal: e.goal } };
-		case "compaction_start":
-		case "compaction_end":
-		case "refine_complete":
-		case "ipython_sent_agent_message":
-			return { ...prev, messages: [...prev.messages, { role: "__marker", marker: e }] };
 		default:
 			return prev;
 	}
 }
-
-function MessageBlock({ message, streaming }: { message: Msg; streaming?: boolean }) {
-	const role = message.role as string;
-	if (role === "__marker") return <Marker event={message.marker as Msg} />;
-	if (role === "user") {
-		return (
-			<div className="msg msg--user">
-				<div className="msg__head">
-					<Eyebrow ink>user</Eyebrow>
-					<Time m={message} />
-				</div>
-				<div className="md" dangerouslySetInnerHTML={{ __html: md(textOf(message.content)) }} />
-			</div>
-		);
-	}
-	if (role === "assistant") {
-		const content = Array.isArray(message.content) ? (message.content as Msg[]) : [];
-		const usage = message.usage as { input?: number; output?: number; cost?: { total?: number } } | undefined;
-		return (
-			<div className={`msg msg--assistant${streaming ? " msg--streaming" : ""}`}>
-				<div className="msg__head">
-					<Eyebrow ink>assistant</Eyebrow>
-					<span className="mono tiny muted">{modelShort(message.model as string | undefined)}</span>
-					{usage && (
-						<span className="mono tiny muted">
-							{tokens(usage.input)}→{tokens(usage.output)} · {usd(usage.cost?.total)}
-						</span>
-					)}
-					<Time m={message} />
-				</div>
-				{content.map((part, i) => {
-					if (part.type === "thinking") {
-						return (
-							<details key={i} className="thinking">
-								<summary>thinking</summary>
-								{String(part.thinking ?? "")}
-							</details>
-						);
-					}
-					if (part.type === "text") return <div key={i} className="md" dangerouslySetInnerHTML={{ __html: md(String(part.text ?? "")) }} />;
-					if (part.type === "toolCall") {
-						const args = part.arguments as Record<string, unknown> | undefined;
-						const code = typeof args?.code === "string" ? args.code : JSON.stringify(args, null, 2);
-						return (
-							<div key={i} className="msg msg--tool" style={{ marginTop: 8 }}>
-								<div className="msg__head">
-									<Eyebrow ink>{String(part.name ?? "tool")}</Eyebrow>
-									<span className="mono tiny muted">{String(part.id ?? "")}</span>
-								</div>
-								<pre className="codeblock">{code}</pre>
-							</div>
-						);
-					}
-					return null;
-				})}
-			</div>
-		);
-	}
-	if (role === "toolResult") {
-		const text = textOf(message.content);
-		const isError = message.isError === true;
-		const details = message.details as Record<string, unknown> | undefined;
-		const images = Array.isArray(message.content) ? (message.content as Msg[]).filter((p) => p.type === "image") : [];
-		return (
-			<details className="msg msg--tool" open={text.length < 1200}>
-				<summary className="msg__head">
-					<Eyebrow ink>{String(message.toolName ?? "result")}</Eyebrow>
-					<span className={`mono tiny ${isError ? "" : "muted"}`} style={isError ? { color: "var(--accent-deep)" } : undefined}>
-						{isError ? "error" : `${text.length} chars`}
-					</span>
-					<Time m={message} />
-				</summary>
-				<pre className={`codeblock${isError ? " codeblock--err" : ""}`}>{text || "(no output)"}</pre>
-				{images.map((im, i) => (
-					<img key={i} alt="tool output" src={`data:${String(im.mimeType ?? "image/png")};base64,${String(im.data ?? "")}`} style={{ maxWidth: "100%", display: "block", borderTop: "var(--hair)" }} />
-				))}
-				{details && Object.keys(details).length > 0 && (
-					<details style={{ padding: "6px 12px", borderTop: "var(--hair)" }}>
-						<summary className="eyebrow" style={{ cursor: "pointer" }}>
-							details
-						</summary>
-						<Json value={details} />
-					</details>
-				)}
-			</details>
-		);
-	}
-	if (role === "custom_message" || message.customType) {
-		const isAgent = message.customType === "agent_message";
-		return (
-			<div className={`msg ${isAgent ? "msg--agent" : "msg--marker"}`}>
-				<div className="msg__head">
-					<Eyebrow ink>{String(message.customType ?? "custom")}</Eyebrow>
-					<Time m={message} />
-				</div>
-				<div className="small" style={{ whiteSpace: "pre-wrap" }}>
-					{textOf(message.content)}
-				</div>
-			</div>
-		);
-	}
-	return (
-		<div className="msg msg--marker">
-			{String(role)} · <Json value={message} />
-		</div>
-	);
-}
-
-function Marker({ event }: { event: Msg }) {
-	const t = String(event.type);
-	let text = t;
-	if (t === "compaction_start") text = `compaction started (${String(event.reason)})`;
-	if (t === "compaction_end") text = `compaction ${event.aborted ? "aborted" : "done"}`;
-	if (t === "refine_complete") text = `refine: ${String((event.result as { summary?: string })?.summary ?? "")}`;
-	if (t === "ipython_sent_agent_message") {
-		const m = event.message as { message?: string; receiver_role?: string; receiver_name?: string };
-		text = `→ ${m.receiver_name ?? m.receiver_role ?? "agent"}: ${m.message ?? ""}`;
-	}
-	return <div className="msg msg--marker">{text}</div>;
-}
-
-function Time({ m }: { m: Msg }) {
-	const ts = m.timestamp as number | string | undefined;
-	return (
-		<span className="mono tiny muted" style={{ marginLeft: "auto" }} title={ts ? dateTime(ts) : undefined}>
-			{ts ? clock(ts) : ""}
-		</span>
-	);
-}
-
-function md(text: string): string {
-	return DOMPurify.sanitize(marked.parse(text, { async: false }) as string);
-}
-
-// A Redeploy (git pull -> observer build -> exit 87 -> supervisor restart) was measured at
-// 35-60 s on the pod, and a full container restart is slower still. The budget must comfortably
-// exceed that or recovery exhausts mid-restart and strands the message, which a 20 s budget did.
-const SEND_BUDGET_MS = 120_000;
 
 type Attachment = { id: string; name: string; bytes: number; status: "uploading" | "done" | "error"; path?: string; error?: string };
 
@@ -424,43 +257,17 @@ function formatBytesShort(bytes: number): string {
 }
 
 /**
- * The model only ever sees the message text, so an uploaded file has to be announced there by
- * path — same contract as ai-ceo-1's `taskWithAttachments`.
+ * Files for the agent go to `<cwd>/inbox/` (the upload contract in server/http/uploads.ts) and
+ * are announced by cwd-relative path, which you then mention in the terminal like any other path.
  */
-export function messageWithAttachments(text: string, attachments: Attachment[]): string {
-	const done = attachments.filter((a) => a.status === "done" && a.path);
-	if (!done.length) return text;
-	const lines = done.map((a) => `- ${a.path} (${formatBytesShort(a.bytes)})`);
-	return `${text}\n\nAttached files (already uploaded to this session's \`inbox/\` folder; open them with these cwd-relative paths):\n${lines.join("\n")}`;
-}
-
-function Composer({ id, streaming, live, follow, setFollow }: { id: string; streaming: boolean; live: boolean; follow: boolean; setFollow: (v: boolean) => void }) {
-	const [mode, setMode] = useState<"prompt" | "steer" | "followUp">("prompt");
-	const [text, setText] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<unknown>();
+function AttachStrip({ id }: { id: string }) {
 	const [attachments, setAttachments] = useState<Attachment[]>([]);
 	const fileInput = useRef<HTMLInputElement>(null);
-	const uploading = attachments.some((a) => a.status === "uploading");
-
-	// A restart banner must not outlive the restart. Once the socket is open again the observer is
-	// demonstrably back, so a stale "observer is restarting" line is worse than nothing: it claims
-	// sending is impossible when pressing Send now works. Only subscribes while such a banner is
-	// actually up, and clears with a plain value (never a functional updater — `error` is typed
-	// `unknown`, so a function would be ambiguous between "new value" and "updater").
-	useEffect(() => {
-		if (!error) return;
-		const msg = error instanceof Error ? error.message : String(error);
-		if (!/observer is restarting|observer unreachable/i.test(msg)) return;
-		return socket.onStatus((s) => {
-			if (s === "open") setError(undefined);
-		});
-	}, [error]);
+	const busy = attachments.some((a) => a.status === "uploading");
 
 	async function attachFiles(list: FileList | null) {
 		if (!list?.length) return;
-		// Sequential, not Promise.all: parallel large uploads starve each other on one uplink
-		// and make every row look stalled at once.
+		// Sequential, not Promise.all: parallel large uploads starve each other on one uplink.
 		for (const file of Array.from(list)) {
 			const localId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 			setAttachments((cur) => [...cur, { id: localId, name: file.name, bytes: file.size, status: "uploading" }]);
@@ -474,95 +281,24 @@ function Composer({ id, streaming, live, follow, setFollow }: { id: string; stre
 		}
 	}
 
-	async function send() {
-		const body = messageWithAttachments(text.trim(), attachments);
-		if (!body) return;
-		setBusy(true);
-		setError(undefined);
-		try {
-			// All restart recovery lives in sendWithRecovery, which is unit-tested against every
-			// failure shape seen on the pod: an inactive session after a pod restart (resume then
-			// send), the proxy interstitial during a Redeploy (safe to re-send), and an ambiguous
-			// 5xx or dropped socket (check the transcript first — re-sending blindly would
-			// duplicate the prompt).
-			await sendWithRecovery({
-				id,
-				mode,
-				body,
-				api,
-				budgetMs: SEND_BUDGET_MS,
-				onStatus: (m) => setError(new Error(m)),
-			});
-			setText("");
-			setAttachments([]);
-			setError(undefined);
-		} catch (e) {
-			setError(e);
-		} finally {
-			setBusy(false);
-		}
-	}
-
 	return (
-		<div className="composer">
-			<ErrorLine error={error} />
-			<div className="row" style={{ justifyContent: "space-between" }}>
-				<div className="seg">
-					{(["prompt", "steer", "followUp"] as const).map((m) => (
-						<button key={m} type="button" className={mode === m ? "is-active" : ""} onClick={() => setMode(m)}>
-							{m === "followUp" ? "follow-up" : m}
-						</button>
-					))}
-				</div>
-				<label className="row tiny muted">
-					<input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> auto-follow
-				</label>
-			</div>
-			<div className="composer__row">
-				<textarea
-					className="textarea grow"
-					placeholder={
-						!live
-							? "Session is idle — sending will resume it first"
-							: mode === "prompt"
-								? streaming
-									? "Queued until the current turn ends…"
-									: "Send a prompt"
-								: mode === "steer"
-									? "Interrupt with a steering note"
-									: "Follow-up after this turn"
-					}
-					value={text}
-					onChange={(e) => setText(e.target.value)}
-					onKeyDown={(e) => {
-						if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void send();
-					}}
-				/>
-				<button type="button" className="btn btn--primary" disabled={busy || uploading || (!text.trim() && !attachments.some((a) => a.status === "done"))} onClick={() => void send()}>
-					{uploading ? "Uploading…" : "Send"}
-				</button>
-			</div>
-			<div className="attach-row">
-				<button type="button" className="btn btn--small attach-button" disabled={busy} onClick={() => fileInput.current?.click()}>
-					Attach files
-				</button>
-				<input
-					ref={fileInput}
-					type="file"
-					multiple
-					hidden
-					onChange={(e) => {
-						void attachFiles(e.target.files);
-						// Reset so re-picking the same file fires change again.
-						e.target.value = "";
-					}}
-				/>
-				<span className="tiny muted">
-					{live ? "Uploaded to this session's inbox/ and listed in the message by path." : "Session is idle — sending resumes it first, then delivers your message."}
-				</span>
-			</div>
+		<div className="attach-row">
+			<button type="button" className="btn btn--small attach-button" disabled={busy} onClick={() => fileInput.current?.click()}>
+				{busy ? "Uploading…" : "Attach files"}
+			</button>
+			<input
+				ref={fileInput}
+				type="file"
+				multiple
+				hidden
+				onChange={(e) => {
+					void attachFiles(e.target.files);
+					e.target.value = "";
+				}}
+			/>
+			<span className="tiny muted">Uploads to this session's inbox/; mention the path in the terminal.</span>
 			{attachments.length > 0 && (
-				<ul className="attach-list">
+				<ul className="attach-list" style={{ flexBasis: "100%" }}>
 					{attachments.map((a) => (
 						<li key={a.id} className={`attach-item attach-${a.status}`}>
 							<span className="attach-name" title={a.name}>
@@ -579,25 +315,48 @@ function Composer({ id, streaming, live, follow, setFollow }: { id: string; stre
 					))}
 				</ul>
 			)}
-			<div className="tiny muted">⌘/Ctrl+Enter to send.</div>
 		</div>
 	);
 }
 
-function StatsPanel({ id, live, state, node }: { id: string; live: boolean; state?: Record<string, unknown>; node?: { tokens?: { input: number; output: number; cacheRead: number; total: number; cost?: number }; messageCount: number } }) {
+/** Live stats (daemon SessionStats) and the disk summary name the same numbers differently. */
+function normalizeStats(stats: Record<string, unknown> | undefined): { usage?: Record<string, number>; cost?: number; messages?: number; contextUsage?: Record<string, number> } {
+	if (!stats) return {};
+	const usage = (stats.tokens ?? stats.usage) as Record<string, number> | undefined;
+	const rawCost = stats.cost ?? (usage as { cost?: unknown } | undefined)?.cost;
+	const cost = typeof rawCost === "number" ? rawCost : typeof (rawCost as { total?: unknown } | undefined)?.total === "number" ? (rawCost as { total: number }).total : undefined;
+	const messages = typeof stats.totalMessages === "number" ? stats.totalMessages : typeof stats.messageCount === "number" ? stats.messageCount : undefined;
+	return { usage, cost, messages, contextUsage: stats.contextUsage as Record<string, number> | undefined };
+}
+
+function StatsPanel({ id, live, streaming, refreshKey, state, node }: { id: string; live: boolean; streaming: boolean; refreshKey: number; state?: Record<string, unknown>; node?: { tokens?: { input: number; output: number; cacheRead: number; total: number; cost?: number }; messageCount: number } }) {
 	const [stats, setStats] = useState<Record<string, unknown>>();
+	// Refetch whenever a message lands (refreshKey), and keep polling while a turn is running so
+	// the counters move with the agent rather than with the next page load.
 	useEffect(() => {
-		void api
-			.stats(id)
-			.then((r) => setStats((r.stats ?? undefined) as Record<string, unknown> | undefined))
-			.catch(() => undefined);
+		let cancelled = false;
+		const refresh = () =>
+			api
+				.stats(id)
+				.then((r) => {
+					if (!cancelled) setStats((r.stats ?? undefined) as Record<string, unknown> | undefined);
+				})
+				.catch(() => undefined);
+		void refresh();
 		if (!live) return;
-		const t = setInterval(() => void api.stats(id).then((r) => setStats((r.stats ?? undefined) as Record<string, unknown> | undefined)).catch(() => undefined), 8000);
-		return () => clearInterval(t);
-	}, [id, live]);
-	const ctx = state?.contextUsage as { tokens?: number; contextWindow?: number; percent?: number } | undefined;
-	const pct = ctx?.percent ?? (ctx?.tokens && ctx.contextWindow ? Math.round((ctx.tokens / ctx.contextWindow) * 100) : undefined);
-	const usage = (stats?.usage as Record<string, number> | undefined) ?? node?.tokens;
+		const t = setInterval(() => void refresh(), streaming ? 2500 : 8000);
+		return () => {
+			cancelled = true;
+			clearInterval(t);
+		};
+	}, [id, live, streaming, refreshKey]);
+	const norm = normalizeStats(stats);
+	const ctx = (norm.contextUsage ?? (state?.contextUsage as Record<string, number> | undefined)) as { tokens?: number; contextWindow?: number; percent?: number } | undefined;
+	const rawPct = ctx?.percent ?? (ctx?.tokens && ctx.contextWindow ? (ctx.tokens / ctx.contextWindow) * 100 : undefined);
+	// The daemon reports e.g. 1.7257000000000002; show one decimal under 10%, whole numbers above.
+	const pct = rawPct === undefined ? undefined : rawPct < 10 ? Math.round(rawPct * 10) / 10 : Math.round(rawPct);
+	const usage = norm.usage ?? (node?.tokens as Record<string, number> | undefined);
+	const cost = norm.cost ?? node?.tokens?.cost;
 	return (
 		<div className="card card__body">
 			{pct !== undefined && (
@@ -616,9 +375,9 @@ function StatsPanel({ id, live, state, node }: { id: string; live: boolean; stat
 			<KV k="input tokens" v={tokens(usage?.input)} mono />
 			<KV k="output tokens" v={tokens(usage?.output)} mono />
 			<KV k="cache read" v={tokens(usage?.cacheRead)} mono />
-			<KV k="total" v={tokens((usage as Record<string, number> | undefined)?.total ?? (usage as Record<string, number> | undefined)?.totalTokens)} mono />
-			<KV k="cost" v={usd(typeof usage?.cost === "number" ? usage.cost : (usage?.cost as unknown as { total?: number })?.total)} mono />
-			<KV k="messages" v={String(stats?.messageCount ?? node?.messageCount ?? "—")} mono />
+			<KV k="total" v={tokens(usage?.total ?? usage?.totalTokens)} mono />
+			<KV k="cost" v={usd(cost)} mono />
+			<KV k="messages" v={String(norm.messages ?? node?.messageCount ?? "—")} mono />
 			{stats && (
 				<details style={{ marginTop: 8 }}>
 					<summary className="eyebrow" style={{ cursor: "pointer" }}>

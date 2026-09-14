@@ -47,7 +47,7 @@ def req(url, token=None, method="GET", body=None, timeout=60):
 
 
 def ssh(host, port, cmd, timeout=45):
-    key = os.path.expanduser("~/.ssh/lh-harness-pod")
+    key = os.path.expanduser("~/.ssh/prime-agent-pod")
     try:
         out = subprocess.run(
             ["ssh", "-p", str(port), "-i", key, "-o", "IdentitiesOnly=yes",
