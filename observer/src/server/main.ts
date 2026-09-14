@@ -9,7 +9,9 @@ import { DaemonBridge } from "./daemon/bridge.ts";
 import { DaemonCommands } from "./daemon/commands.ts";
 import { SessionStreamer } from "./daemon/session-streamer.ts";
 import { DeployRunner, RESTART_EXIT_CODE } from "./deploy/runner.ts";
+import { BenchService } from "./bench/service.ts";
 import { BindingService } from "./binding/service.ts";
+import { registerBenchRoutes } from "./http/bench-routes.ts";
 import { ModelPodService } from "./model-pod/service.ts";
 import { agentPaths } from "./disk/paths.ts";
 import { AgentDirWatcher } from "./disk/watcher.ts";
@@ -135,6 +137,29 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 	// observer has no route back to a laptop behind a home NAT.
 	const binding = new BindingService({ dataDir: env.dataDir });
 
+	// Checkpoint benchmarks: capture, mining, experiments, weekly re-runs, and the live advisor.
+	const bench = new BenchService({
+		dataDir: env.dataDir,
+		paths,
+		primeAgentBin: env.primeAgentBin,
+		repoRoot: env.repoRoot,
+		harnessVersion: HARNESS_VERSION,
+		fleet,
+		commands,
+		watcher,
+	});
+	const benchPending = new Set<string>();
+	let benchTimer: NodeJS.Timeout | undefined;
+	bench.store.onChange((kind) => {
+		benchPending.add(kind);
+		if (benchTimer) return;
+		benchTimer = setTimeout(() => {
+			benchTimer = undefined;
+			for (const k of benchPending) hub.publish("bench", { t: "bench.changed", kind: k });
+			benchPending.clear();
+		}, 400);
+	});
+
 	fleet.onTree((tree) => hub.publish("fleet", { t: "fleet.snapshot", tree }));
 	bridge.subscribe({ onState: (info) => hub.publish("daemon", { t: "daemon.state", daemon: info }) });
 	watcher.onChange((events) => {
@@ -160,6 +185,7 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		serverStartedAt,
 		versions: { observer: observerVersion, harness: HARNESS_VERSION },
 	});
+	registerBenchRoutes(router, bench);
 
 	const server = createServer(async (req, res) => {
 		const url = req.url ?? "/";
@@ -200,6 +226,7 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		shuttingDown = true;
 		hub.closeAll(1012, "restarting");
 		terminals.closeAll(1012, "restarting");
+		bench.stop();
 		watcher.stop();
 		bridge.stop();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -212,6 +239,7 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 	watcher.start();
 	bridge.start();
 	await fleet.start();
+	bench.start();
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
 		server.listen(env.port, env.host, () => resolve());

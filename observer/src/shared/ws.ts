@@ -12,6 +12,7 @@ export type Topic =
 	| "comms"
 	| "deploy"
 	| "uploads"
+	| "bench"
 	| `session:${string}`;
 
 export type ClientMessage =
@@ -42,7 +43,8 @@ export type ServerMessage =
 	| { t: "comms.status"; status: AgentMessagesStatus }
 	| { t: "deploy.started"; runId: string }
 	| { t: "deploy.log"; runId: string; line: string; stream: "out" | "err"; at: string }
-	| { t: "deploy.done"; runId: string; exitCode: number; willRestart: boolean };
+	| { t: "deploy.done"; runId: string; exitCode: number; willRestart: boolean }
+	| { t: "bench.changed"; kind: string };
 
 export function isSessionTopic(topic: string): topic is `session:${string}` {
 	return topic.startsWith("session:");
