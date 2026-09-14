@@ -59,8 +59,11 @@ export class SessionActivity {
 		const touches: SessionTouch[] = [];
 		for (const path of new Set(paths.filter((p) => this.isRootSessionFile(p)))) {
 			let size: number;
+			let mtimeMs: number;
 			try {
-				size = statSync(path).size;
+				const st = statSync(path);
+				size = st.size;
+				mtimeMs = st.mtimeMs;
 			} catch {
 				delete this.files[path];
 				continue;
@@ -68,7 +71,8 @@ export class SessionActivity {
 			const known = this.files[path];
 			if (!known) {
 				const header = readHeader(path);
-				this.files[path] = { offset: size, sessionId: header?.id ?? basename(path, ".jsonl"), cwd: header?.cwd, lastActivityAt: new Date().toISOString() };
+				// The file's own mtime, not "now": otherwise every old session looks active at boot.
+				this.files[path] = { offset: size, sessionId: header?.id ?? basename(path, ".jsonl"), cwd: header?.cwd, lastActivityAt: new Date(mtimeMs).toISOString() };
 				continue;
 			}
 			if (size < known.offset) {

@@ -286,11 +286,12 @@ export class BenchRunner {
 		mkdirSync(agentDir, { recursive: true });
 		mkdirSync(sessionsDir, { recursive: true });
 		const snapDir = this.o.store.snapshotDir(task.id);
-		const liveAuth = join(this.o.paths.agentDir, "auth.json");
-		if (existsSync(liveAuth)) {
-			cpSync(liveAuth, join(agentDir, "auth.json"));
-			chmodSync(join(agentDir, "auth.json"), 0o600);
+		const auth = trialAuth(readJsonFile<Record<string, unknown>>(join(this.o.paths.agentDir, "auth.json")));
+		if (auth.dropped.length > 0 && !(this.o.env ?? process.env).ANTHROPIC_OAUTH_TOKEN) {
+			trial.warnings.push(`OAuth logins (${auth.dropped.join(", ")}) are not copied into trials; set ANTHROPIC_OAUTH_TOKEN (claude setup-token) in the observer env or those providers will have no credentials`);
 		}
+		writeFileSync(join(agentDir, "auth.json"), JSON.stringify(auth.kept, null, 2));
+		chmodSync(join(agentDir, "auth.json"), 0o600);
 		for (const [snapName, live] of [
 			[SNAPSHOT_FILES.models, this.o.paths.modelsFile],
 			[SNAPSHOT_FILES.settings, this.o.paths.settingsFile],
@@ -436,6 +437,22 @@ export function mergeHarnessRaw(global: Record<string, unknown> | undefined, loc
 	for (const kind of new Set([...Object.keys(g), ...Object.keys(l)])) entries[kind] = { ...(g[kind] ?? {}), ...(l[kind] ?? {}) };
 	const refinements = [...(Array.isArray(global?.refinements) ? global.refinements : []), ...(Array.isArray(local?.refinements) ? local.refinements : [])];
 	return { schema: Math.max(Number(global?.schema ?? 1), Number(local?.schema ?? 1)), entries, refinements };
+}
+
+/**
+ * Credentials for an isolated trial agent dir. OAuth entries are never copied: refresh tokens
+ * rotate, so a trial refreshing its copy silently invalidates the operator's own login. API keys
+ * are static and safe to copy; subscription auth reaches trials through ANTHROPIC_OAUTH_TOKEN.
+ */
+export function trialAuth(live: Record<string, unknown> | undefined): { kept: Record<string, unknown>; dropped: string[] } {
+	const kept: Record<string, unknown> = {};
+	const dropped: string[] = [];
+	for (const [provider, cred] of Object.entries(live ?? {})) {
+		const type = (cred as { type?: unknown } | null)?.type;
+		if (type === "oauth" || (cred && typeof cred === "object" && "refresh" in cred)) dropped.push(provider);
+		else kept[provider] = cred;
+	}
+	return { kept, dropped };
 }
 
 export function modelArgs(model: string): string[] {

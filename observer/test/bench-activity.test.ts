@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import type { BenchTask, VerifiedSkill } from "../src/shared/bench.ts";
 import { SessionActivity } from "../src/server/bench/activity.ts";
 import { advisorMessage } from "../src/server/bench/advisor.ts";
 import { looksLikeIntervention } from "../src/server/bench/intervention.ts";
-import { mergeHarnessRaw, modelArgs, normalizeVerdict, skillBlock } from "../src/server/bench/runner.ts";
+import { mergeHarnessRaw, modelArgs, normalizeVerdict, skillBlock, trialAuth } from "../src/server/bench/runner.ts";
 import { ensureFrontmatter, normalizeCriteria } from "../src/server/bench/service.ts";
 
 const root = mkdtempSync(join(tmpdir(), "bench-activity-"));
@@ -23,7 +23,10 @@ describe("session activity tail reader", () => {
 		const state = join(root, "activity.json");
 		const act = new SessionActivity(sessions, state);
 
+		const old = new Date("2026-01-01T00:00:00Z");
+		utimesSync(file, old, old);
 		expect(act.scan([file]).users).toEqual([]);
+		expect(act.knownFiles()[0]!.lastActivityAt).toBe(old.toISOString());
 
 		appendFileSync(file, line({ type: "message", id: "a1", parentId: "u0", timestamp: "t", message: { role: "assistant", content: [] } }));
 		appendFileSync(file, line({ type: "message", id: "u1", parentId: "a1", timestamp: "t", message: { role: "user", content: [{ type: "text", text: "benchmark this" }] } }));
@@ -65,6 +68,17 @@ describe("runner and advisor helpers", () => {
 		const m = mergeHarnessRaw({ schema: 1, entries: { memory: { a: { v: 1 }, b: { v: 1 } } }, refinements: [1] }, { schema: 2, entries: { memory: { b: { v: 2 } }, prompt: { p: {} } }, refinements: [2] });
 		expect(m).toEqual({ schema: 2, entries: { memory: { a: { v: 1 }, b: { v: 2 } }, prompt: { p: {} } }, refinements: [1, 2] });
 		expect(mergeHarnessRaw(undefined, undefined)).toBeUndefined();
+	});
+
+	it("never copies rotating OAuth credentials into a trial", () => {
+		const r = trialAuth({
+			anthropic: { type: "oauth", access: "a", refresh: "r", expires: 1 },
+			legacy: { access: "a", refresh: "r" },
+			"nano-gpt": { type: "api_key", key: "k" },
+		});
+		expect(r.dropped.sort()).toEqual(["anthropic", "legacy"]);
+		expect(r.kept).toEqual({ "nano-gpt": { type: "api_key", key: "k" } });
+		expect(trialAuth(undefined)).toEqual({ kept: {}, dropped: [] });
 	});
 
 	it("splits provider/model", () => {
