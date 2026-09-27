@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""`prime`: open the harness on the RunPod pod from any Mac terminal.
+
+    prime                  agents view of the pod: every live session, attach or start one from there
+    prime new [args]       a new interactive session (args go to prime-agent)
+    prime <args>           any other prime-agent command on the pod (list, attach <agent>, send, ...)
+    prime ssh              a shell on the pod (agent env loaded)
+    prime web              open the observer web UI (bench) and copy its token to the clipboard
+    prime status           pod id, state, cost, ssh endpoint, web URL
+
+The pod is taken from $PRIME_POD, else deploy/.binding.json (shared with pod-bind.py), else the
+newest pod named prime-agent-eray. Its ssh port is re-resolved on every call because RunPod remaps
+22/tcp whenever a pod restarts. Install: ln -s <repo>/deploy/prime ~/.local/bin/prime
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+HERE = Path(os.path.realpath(__file__)).parent
+BINDING = HERE / ".binding.json"
+ENV_FILE = HERE / ".env"
+IDENTITY = Path.home() / ".ssh" / "prime-agent-pod"
+KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts_prime"
+POD_NAME = "prime-agent-eray"
+OBSERVER_PORT = 8790
+REMOTE_HOME = "/workspace/app/deploy/prime-home.sh"
+
+
+def die(msg: str) -> None:
+    print(f"prime: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def api_key() -> str:
+    cfg = (Path.home() / ".runpod" / "config.toml").read_text()
+    m = re.search(r"apikey\s*=\s*['\"]?([^'\"\s]+)['\"]?", cfg)
+    if not m:
+        die("no apikey in ~/.runpod/config.toml")
+    return m.group(1)
+
+
+def gql(query: str, variables: dict | None = None) -> dict:
+    url = "https://api.runpod.io/graphql?api_key=" + urllib.parse.quote(api_key())
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"query": query, "variables": variables or {}}).encode(),
+        headers={"content-type": "application/json", "user-agent": "Mozilla/5.0 prime-agent-eray-prime"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as res:
+            return json.load(res)
+    except urllib.error.URLError as e:
+        die(f"RunPod API unreachable: {e}")
+    return {}
+
+
+POD_FIELDS = "id name desiredStatus costPerHr runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }"
+
+
+def find_pod() -> dict:
+    pod_id = os.environ.get("PRIME_POD")
+    if not pod_id and BINDING.exists():
+        pod_id = json.loads(BINDING.read_text()).get("pod")
+    if pod_id:
+        pod = (gql(f"query($id: String!) {{ pod(input: {{podId: $id}}) {{ {POD_FIELDS} }} }}", {"id": pod_id}).get("data") or {}).get("pod")
+        if pod:
+            return pod
+    pods = ((gql(f"{{ myself {{ pods {{ {POD_FIELDS} }} }} }}").get("data") or {}).get("myself") or {}).get("pods") or []
+    named = [p for p in pods if p.get("name") == POD_NAME]
+    if not named:
+        die(f"no pod found (tried {pod_id or 'no binding'} and name {POD_NAME}); deploy one: see deploy/pod.md")
+    running = [p for p in named if p.get("desiredStatus") == "RUNNING"]
+    return (running or named)[0]
+
+
+def ssh_endpoint(pod: dict) -> tuple[str, int]:
+    if pod.get("desiredStatus") != "RUNNING":
+        die(f"pod {pod['id']} is {pod.get('desiredStatus')}; start it in the RunPod console or with the runpod MCP")
+    for p in (pod.get("runtime") or {}).get("ports") or []:
+        if p.get("privatePort") == 22 and p.get("isIpPublic"):
+            return p["ip"], int(p["publicPort"])
+    die(f"pod {pod['id']} has no public ssh port yet (still booting?)")
+    return "", 0
+
+
+def web_url(pod: dict) -> str:
+    return f"https://{pod['id']}-{OBSERVER_PORT}.proxy.runpod.net"
+
+
+def ssh(pod: dict, remote_args: list[str]) -> None:
+    host, port = ssh_endpoint(pod)
+    # Carry the local terminal's colour/identity hints: sshd forwards TERM only.
+    passthrough = [f"{k}={shlex.quote(os.environ[k])}" for k in ("COLORTERM", "TERM_PROGRAM") if os.environ.get(k)]
+    remote = " ".join([*(["env", *passthrough] if passthrough else []), "bash", REMOTE_HOME, *map(shlex.quote, remote_args)])
+    cmd = [
+        "ssh", "-t", "-q",
+        "-i", str(IDENTITY), "-o", "IdentitiesOnly=yes",
+        "-p", str(port),
+        # The host key lives on the volume and survives pod replacement; ip:port does not.
+        "-o", "HostKeyAlias=prime-agent-pod",
+        "-o", f"UserKnownHostsFile={KNOWN_HOSTS}",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8",
+        f"node@{host}", remote,
+    ]
+    os.execvp("ssh", cmd)
+
+
+def observer_token() -> str | None:
+    if not ENV_FILE.exists():
+        return None
+    for line in ENV_FILE.read_text().splitlines():
+        if line.startswith("PRIME_OBSERVER_TOKEN="):
+            return line.split("=", 1)[1].strip().strip("'\"")
+    return None
+
+
+def main(argv: list[str]) -> None:
+    if argv[:1] in (["-h"], ["--help"], ["help"]):
+        print(__doc__.strip())
+        return
+    pod = find_pod()
+    if argv[:1] == ["status"]:
+        try:
+            host, port = ssh_endpoint(pod)
+            endpoint = f"{host}:{port}"
+        except SystemExit:
+            endpoint = "-"
+        print(f"pod      {pod['id']} ({pod.get('name')})")
+        print(f"state    {pod.get('desiredStatus')}  ${pod.get('costPerHr')}/h  up {((pod.get('runtime') or {}).get('uptimeInSeconds') or 0) // 60} min")
+        print(f"ssh      {endpoint}")
+        print(f"web      {web_url(pod)}")
+        return
+    if argv[:1] == ["web"]:
+        token = observer_token()
+        if token:
+            subprocess.run(["pbcopy"], input=token.encode(), check=True)
+            print("prime: observer token copied to the clipboard (paste it on the login page once per pod)")
+        subprocess.run(["open", web_url(pod) + "/bench"], check=False)
+        return
+    if argv[:1] == ["ssh"]:
+        ssh(pod, ["__shell__"])
+        return
+    ssh(pod, argv)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -6,6 +6,9 @@
 **/.turbo
 **/*.log
 deploy/.env
+deploy/.binding.json
+# Operator drop folder (untracked; may hold credentials such as App Store Connect keys).
+inbox
 **/secrets.env
 **/.DS_Store
 observer/test/fixtures

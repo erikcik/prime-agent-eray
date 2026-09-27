@@ -31,6 +31,10 @@ RUN apt-get update \
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
+# Claude Code: default backend for the observer's bench helpers and the Claude Code benchmark arms.
+# Pinned to a release at least 7 days old (same rule as .npmrc min-release-age).
+RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@2.1.278 && claude --version
+
 ENV HOME=/home/node \
     TMPDIR=/tmp \
     PRIME_AGENT_KERNEL_VENV=/opt/prime-agent/kernel-venv \

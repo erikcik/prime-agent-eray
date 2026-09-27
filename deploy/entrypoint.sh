@@ -179,6 +179,18 @@ banner() {
   log "----------------------------------------------------------------"
 }
 
+# The agent env for ssh logins (deploy/prime-home.sh sources it). sshd starts sessions with a bare
+# environment, and a TUI launched without the provider tokens and the daemon's TMPDIR would create
+# workers with no model credentials or start a second daemon. Container disk honours chmod; the
+# volume does not, so this never goes under $VOLUME.
+write_shell_env() {
+  local tmp
+  tmp="$(mktemp "$HOME/.prime-env.XXXXXX")"
+  chmod 600 "$tmp"
+  export -p | grep -v -E '^declare -x (PRIME_OBSERVER_TOKEN|OLDPWD|PWD|SHLVL|_)=' >"$tmp"
+  mv "$tmp" "$HOME/.prime-env"
+}
+
 supervise_daemon() {
   local backoff=2
   while true; do
@@ -202,6 +214,7 @@ serve() {
   export PRIME_OBSERVER_DEPLOY_HOOK="$APP_DIR/deploy/refresh.sh"
   export PRIME_OBSERVER_PRIME_AGENT_BIN="$HOME/.local/bin/prime-agent"
   export PRIME_AGENT_BIN="$HOME/.local/bin/prime-agent"
+  write_shell_env
   # Started BEFORE the observer gets its RunPod key, from the scrubbed environment.
   supervise_daemon &
   echo "$OBSERVER_PORT" >/tmp/observer-serving
