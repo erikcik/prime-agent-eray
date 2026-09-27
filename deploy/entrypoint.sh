@@ -132,7 +132,7 @@ ensure_built() {
   if [[ "$need" == "1" || "${DEPLOY_FORCE_BUILD:-0}" == "1" ]]; then
     log "building harness + observer (first boot on this volume; uses the warmed npm cache)"
     npm ci --no-audit --no-fund
-    npm run build
+    bash deploy/build-harness.sh
     (cd observer && npm install --no-audit --no-fund && npm run build)
   fi
   # A default provider catalog for the pod, if none exists yet.

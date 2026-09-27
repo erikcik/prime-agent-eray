@@ -3,7 +3,7 @@
 #
 #   git fetch -> compute changed paths -> git pull --ff-only
 #   -> npm ci            (only if package-lock.json changed)
-#   -> npm run build     (only if packages/** or root build config changed)
+#   -> build-harness.sh  (only if packages/** or root build config changed)
 #   -> observer build    (only if observer/** changed)
 #   -> restart scope:
 #        observer-only change  => exit 0; the observer exits 87 and its supervisor restarts it.
@@ -74,8 +74,8 @@ fi
 
 phase build
 if $harness_changed; then
-  log "harness sources changed: npm run build (tui -> ai -> agent -> coding-agent)"
-  npm run build 2>&1 | tail -n 5 | sed 's/^/[refresh]   /'
+  log "harness sources changed: build-harness.sh (tui -> ai -> agent -> coding-agent)"
+  bash deploy/build-harness.sh 2>&1 | tail -n 5 | sed 's/^/[refresh]   /'
 else
   log "packages/ unchanged: skipping harness build"
 fi

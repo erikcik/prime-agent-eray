@@ -55,7 +55,7 @@ WORKDIR /build
 RUN mkdir -p /opt/prime-agent /opt/uv-cache /opt/npm-cache && chown -R node:node /opt/prime-agent /opt/uv-cache /opt/npm-cache
 USER node
 RUN npm ci --no-audit --no-fund \
- && npm run build \
+ && bash deploy/build-harness.sh \
  && (cd observer && npm install --no-audit --no-fund && npm run build) \
  && PRIME_AGENT_INSTALL_UV=0 node_modules/.bin/tsx packages/coding-agent/src/core/kernel/bootstrap-cli.ts \
  && ls /opt/prime-agent/kernel-venv/bin/python
