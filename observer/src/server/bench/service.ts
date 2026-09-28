@@ -107,8 +107,10 @@ export class BenchService {
 
 	start(): void {
 		this.runner.recoverOnBoot();
-		// First sight of every existing session starts at its end: history is not "new activity".
-		this.activity.scan(this.o.fleet.sessionFiles());
+		// Sessions seen for the first time start at their end (history is not new activity); known ones
+		// resume from their saved offsets, so a "benchmark this" sent while the observer was restarting
+		// still gets handled. Discarding this scan's result used to swallow exactly those messages.
+		this.onSessionFiles(this.o.fleet.sessionFiles());
 		this.unsubscribe = this.o.watcher.onChange((events) => {
 			const files = events.filter((e) => e.area === "sessions").map((e) => e.path);
 			if (files.length > 0) this.onSessionFiles(files);
