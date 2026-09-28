@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
 	Arm,
@@ -125,6 +125,10 @@ export class BenchService {
 			t.unref();
 			this.timers.push(t);
 		};
+		// Safety net under the watcher: Node's recursive fs.watch on Linux stopped reporting appends to
+		// a session created after startup (2026-09-28, the VPS sandbox), so a "benchmark this" never
+		// reached the intervention detector. Unchanged files cost one stat each.
+		every(3_000, () => this.onSessionFiles(this.rootSessionFiles()));
 		every(60_000, () => this.periodicRecord());
 		every(10 * 60_000, () => this.scheduleTick());
 		every(5 * 60_000, () => this.autoMineTick());
@@ -153,6 +157,16 @@ export class BenchService {
 				this.lastPeriodic.set(u.cwd, Date.now());
 			}
 			if (s.intervention.enabled && looksLikeIntervention(u.text)) void this.handleIntervention(u);
+		}
+	}
+
+	private rootSessionFiles(): string[] {
+		try {
+			return readdirSync(this.o.paths.sessionsDir)
+				.filter((f) => f.endsWith(".jsonl"))
+				.map((f) => join(this.o.paths.sessionsDir, f));
+		} catch {
+			return [];
 		}
 	}
 
