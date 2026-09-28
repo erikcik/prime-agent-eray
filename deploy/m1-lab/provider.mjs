@@ -4,7 +4,8 @@
 // model it has loaded, whatever `model` the request names, so listing others would mislead /model.
 //
 //   node provider.mjs --base-url http://127.0.0.1:18080/v1 --id <alias> --name <label> \
-//     --context 131072 --max-tokens 32768 [--models-json <path>]
+//     --context 131072 --max-tokens 32768 [--api-key <value>] [--models-json <path>]
+// --api-key takes a models.json config value: a literal, an env var name, or "!command".
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -28,7 +29,7 @@ const provider = {
 	name: "M1 lab (llama.cpp over SSH)",
 	baseUrl: opt("base-url", "http://127.0.0.1:18080/v1"),
 	api: "openai-completions",
-	apiKey: "m1-lab-local",
+	apiKey: opt("api-key", "m1-lab-local"),
 	compat: {
 		supportsDeveloperRole: false,
 		supportsStore: false,

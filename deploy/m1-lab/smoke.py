@@ -12,6 +12,7 @@ Exit 0 when every required check passes.
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -24,13 +25,14 @@ p.add_argument("--timeout", type=float, default=900)
 a = p.parse_args()
 
 results = []
+API_KEY = os.environ.get("M1_LAB_API_KEY", "m1-lab-local")
 
 
 def post(path, body, stream=False):
     req = urllib.request.Request(
         a.base_url + path,
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer m1-lab-local"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"},
     )
     resp = urllib.request.urlopen(req, timeout=a.timeout)
     if not stream:
@@ -101,7 +103,8 @@ def assemble_tool_calls(events):
 print(f"m1-lab smoke: {a.model} @ {a.base_url}")
 
 if wanted("models"):
-    models = json.load(urllib.request.urlopen(a.base_url + "/models", timeout=30))
+    req = urllib.request.Request(a.base_url + "/models", headers={"Authorization": f"Bearer {API_KEY}"})
+    models = json.load(urllib.request.urlopen(req, timeout=30))
     ids = [m["id"] for m in models.get("data", [])]
     check("models", a.model in ids, f"served ids {ids}")
 

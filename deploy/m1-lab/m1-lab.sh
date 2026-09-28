@@ -8,6 +8,10 @@
 #   m1-lab.sh session [args...]        prime-agent on the M1 model
 #   m1-lab.sh status | logs [n] | down
 #
+# Direct mode, when SSH to the M1 is not allowed (e.g. Remote Login limited to admins):
+#   m1-lab.sh direct-setup [profile]   build one server file to run by hand on the M1 (API key baked in)
+#   m1-lab.sh direct-link <addr>...    forward 127.0.0.1:18080 to the M1 (cable link-local first)
+#
 # Lower-level steps: probe, install, pull [profile] [--wait], start [profile], stop, tunnel
 # [start|stop|status], provider [profile], smoke, bench. Profiles live in profiles.sh.
 
@@ -38,6 +42,21 @@ need_connect() {
 }
 
 rssh() { ssh -F "$SSH_CFG" "$ALIAS" "$@"; }
+
+API_KEY_FILE="$CONF_DIR/api-key"
+DIRECT_TARGETS="$CONF_DIR/direct-targets"
+DIRECT_PROFILE="$CONF_DIR/direct-profile"
+
+direct_mode() { [ -f "$DIRECT_TARGETS" ]; }
+
+# The profile being served: from the M1 over SSH, or as recorded by direct-setup.
+current_profile() {
+	if direct_mode; then
+		cat "$DIRECT_PROFILE" 2>/dev/null
+	else
+		remote status | sed -n 's/.*profile=\([^ ]*\).*/\1/p' | head -1
+	fi
+}
 
 remote() {
 	need_connect
@@ -171,7 +190,7 @@ TUNNEL_PID="$CONF_DIR/tunnel.pid"
 tunnel_alive() { [ -f "$TUNNEL_PID" ] && kill -0 "$(cat "$TUNNEL_PID")" 2>/dev/null; }
 
 cmd_tunnel() {
-	need_connect
+	direct_mode || need_connect
 	case "${1:-start}" in
 	start)
 		if tunnel_alive; then
@@ -180,14 +199,30 @@ cmd_tunnel() {
 			if lsof -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 				die "port $LOCAL_PORT is taken by another process (set M1_LAB_LOCAL_PORT)"
 			fi
-			# Reconnects by itself when the link drops (sleep, cable, Wi-Fi roam). ControlPath=none: through
-			# a shared master the forward would live in the mux process and die with it.
-			(
-				trap '' HUP
-				exec bash -c "while :; do ssh -F '$SSH_CFG' -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -N -L 127.0.0.1:$LOCAL_PORT:127.0.0.1:$REMOTE_PORT $ALIAS; sleep 3; done"
-			) >>"$CONF_DIR/tunnel.log" 2>&1 </dev/null &
-			echo $! >"$TUNNEL_PID"
-			say "tunnel started (127.0.0.1:$LOCAL_PORT -> M1 127.0.0.1:$REMOTE_PORT)"
+			if direct_mode; then
+				local targets=() t
+				while read -r t; do [ -n "$t" ] && targets+=(--target "$t"); done <"$DIRECT_TARGETS"
+				(
+					trap '' HUP
+					exec python3 "$HERE/forward.py" --listen "$LOCAL_PORT" --port "$REMOTE_PORT" "${targets[@]}"
+				) >>"$CONF_DIR/tunnel.log" 2>&1 </dev/null &
+				echo $! >"$TUNNEL_PID"
+				say "forwarder started (127.0.0.1:$LOCAL_PORT -> $(tr '\n' ' ' <"$DIRECT_TARGETS")port $REMOTE_PORT)"
+			else
+				# Reconnects by itself when the link drops (sleep, cable, Wi-Fi roam). ControlPath=none:
+				# through a shared master the forward would live in the mux process and die with it.
+				(
+					trap '' HUP
+					exec bash -c "while :; do ssh -F '$SSH_CFG' -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -N -L 127.0.0.1:$LOCAL_PORT:127.0.0.1:$REMOTE_PORT $ALIAS; sleep 3; done"
+				) >>"$CONF_DIR/tunnel.log" 2>&1 </dev/null &
+				echo $! >"$TUNNEL_PID"
+				say "tunnel started (127.0.0.1:$LOCAL_PORT -> M1 127.0.0.1:$REMOTE_PORT)"
+			fi
+		fi
+		if direct_mode; then
+			# The M1 server may still be downloading; report instead of waiting.
+			say "M1 server health: $(curl -s -m 5 "$BASE_URL/health" || echo 'not answering yet')"
+			return 0
 		fi
 		local i=0
 		until curl -s -o /dev/null -m 3 "$BASE_URL/health"; do
@@ -200,8 +235,9 @@ cmd_tunnel() {
 		if tunnel_alive; then
 			local pid
 			pid="$(cat "$TUNNEL_PID")"
-			kill "$pid" 2>/dev/null || true
+			# Children first: once the loop is gone its ssh is reparented and pkill -P misses it.
 			pkill -P "$pid" 2>/dev/null || true
+			kill "$pid" 2>/dev/null || true
 			say "tunnel stopped"
 		fi
 		rm -f "$TUNNEL_PID"
@@ -215,21 +251,25 @@ cmd_tunnel() {
 
 cmd_provider() {
 	local profile="${1:-}"
-	[ -n "$profile" ] || profile="$(remote status | sed -n 's/.*profile=\([^ ]*\).*/\1/p' | head -1)"
+	[ -n "$profile" ] || profile="$(current_profile)"
 	[ -n "$profile" ] || profile="$M1_LAB_DEFAULT_PROFILE"
 	profile_load "$profile"
+	local key_args=()
+	# The key stays in its 0600 file; models.json only holds the command that reads it.
+	direct_mode && key_args=(--api-key "!cat '$API_KEY_FILE'")
 	node "$HERE/provider.mjs" \
 		--base-url "$BASE_URL/v1" --id "$PROFILE_ALIAS" --name "$PROFILE_NAME" \
-		--context "$PROFILE_CTX" --max-tokens "$PROFILE_MAX_TOKENS"
+		--context "$PROFILE_CTX" --max-tokens "$PROFILE_MAX_TOKENS" ${key_args[@]+"${key_args[@]}"}
 }
 
 cmd_smoke() {
 	local profile
-	profile="$(remote status | sed -n 's/.*profile=\([^ ]*\).*/\1/p' | head -1)"
+	profile="$(current_profile)"
 	[ -n "$profile" ] || die "no model is being served (run '$0 start')"
 	profile_load "$profile"
 	local failed=0
-	python3 "$HERE/smoke.py" --base-url "$BASE_URL/v1" --model "$PROFILE_ALIAS" || failed=1
+	M1_LAB_API_KEY="$(cat "$API_KEY_FILE" 2>/dev/null || echo m1-lab-local)" \
+		python3 "$HERE/smoke.py" --base-url "$BASE_URL/v1" --model "$PROFILE_ALIAS" || failed=1
 	if [ "${M1_LAB_SKIP_AGENT_SMOKE:-}" != 1 ]; then
 		say "prime-agent end-to-end (ipython tool call through the harness)"
 		node "$REPO/deploy/smoke/json-assert.mjs" --provider m1-lab --model "$PROFILE_ALIAS" --tool --timeout-ms 900000 || failed=1
@@ -242,6 +282,11 @@ cmd_bench() {
 }
 
 cmd_status() {
+	if direct_mode; then
+		say "direct mode: $(tr '\n' ' ' <"$DIRECT_TARGETS")profile=$(current_profile)"
+		cmd_tunnel status
+		return 0
+	fi
 	need_connect
 	say "$(grep -E '^\s+(HostName|User) ' "$SSH_CFG" | awk '{printf "%s=%s ", $1, $2}')"
 	remote status
@@ -282,7 +327,7 @@ cmd_up() {
 
 cmd_session() {
 	local profile
-	profile="$(remote status | sed -n 's/.*profile=\([^ ]*\).*/\1/p' | head -1)"
+	profile="$(current_profile)"
 	[ -n "$profile" ] || die "no model is being served (run '$0 up')"
 	profile_load "$profile"
 	tunnel_alive || cmd_tunnel start
@@ -297,7 +342,47 @@ cmd_session() {
 
 cmd_down() {
 	cmd_tunnel stop
-	remote stop
+	if direct_mode; then
+		say "the server keeps running on the M1; stop it there with: bash ~/Downloads/m1-lab-server.sh stop"
+	else
+		remote stop
+	fi
+}
+
+cmd_direct_setup() {
+	local profile="${1:-$M1_LAB_DEFAULT_PROFILE}"
+	profile_load "$profile"
+	mkdir -p "$CONF_DIR"
+	chmod 700 "$CONF_DIR"
+	if [ ! -s "$API_KEY_FILE" ]; then
+		(umask 077 && openssl rand -hex 24 >"$API_KEY_FILE")
+	fi
+	echo "$profile" >"$DIRECT_PROFILE"
+	local out="$CONF_DIR/m1-lab-server.sh" key
+	key="$(cat "$API_KEY_FILE")"
+	# One self-contained file: remote.sh with profiles.sh inlined, listening on all interfaces
+	# (IPv4 + IPv6, so the cable's link-local address works) behind the API key.
+	awk -v prof="$HERE/profiles.sh" -v key="$key" -v profile="$profile" '
+		/^\. \.\/profiles\.sh$/ { while ((getline line < prof) > 0) print line; next }
+		/^M1_LAB_BIND=/ { print "M1_LAB_BIND=\"${M1_LAB_BIND:-::}\""; next }
+		/^M1_LAB_API_KEY=/ { print "M1_LAB_API_KEY=\"${M1_LAB_API_KEY:-" key "}\""; next }
+		/^M1_LAB_DEFAULT_PROFILE=/ { print "M1_LAB_DEFAULT_PROFILE=\"" profile "\""; next }
+		{ print }
+	' "$HERE/remote.sh" >"$out"
+	chmod 600 "$out"
+	bash -n "$out" || die "generated server file does not parse"
+	say "server file for the M1: $out"
+	say "on the M1, in Terminal:  bash ~/Downloads/m1-lab-server.sh up"
+}
+
+cmd_direct_link() {
+	[ $# -gt 0 ] || die "usage: $0 direct-link <addr> [addr...]   (e.g. 'fe80::1%en5' then the campus hostname)"
+	[ -s "$API_KEY_FILE" ] || die "run '$0 direct-setup' first"
+	mkdir -p "$CONF_DIR"
+	printf '%s\n' "$@" >"$DIRECT_TARGETS"
+	cmd_tunnel stop
+	cmd_tunnel start
+	cmd_provider
 }
 
 sub="${1:-}"
@@ -323,8 +408,10 @@ logs) remote logs "${1:-60}" ;;
 up) cmd_up "$@" ;;
 session) cmd_session "$@" ;;
 down) cmd_down ;;
+direct-setup) cmd_direct_setup "$@" ;;
+direct-link) cmd_direct_link "$@" ;;
 *)
-	sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
 	[ -z "$sub" ] || exit 2
 	;;
 esac

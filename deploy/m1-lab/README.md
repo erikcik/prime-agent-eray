@@ -47,6 +47,30 @@ on the M1, so a dropped SSH link does not stop it. `up` then waits and prints pr
 Other commands: `status`, `logs [n]`, `pull <profile> [--wait]`, `start <profile>`, `stop`,
 `tunnel start|stop|status`, `provider [profile]`, `smoke`, `bench [--concurrency 1,2]`.
 
+## Direct mode (no SSH: Remote Login limited to admins)
+
+University-managed Macs often allow Remote Login for **Administrators only**; a non-admin account is
+refused even with the right password or key (`dseditgroup -o checkmember -m "$(whoami)" admin` on the
+M1 tells you). Direct mode needs no admin rights:
+
+```bash
+deploy/m1-lab/m1-lab.sh direct-setup            # API key + one self-contained server file
+# copy ~/.config/m1-lab/m1-lab-server.sh to the M1 (AirDrop/download), then on the M1:
+#   bash ~/Downloads/m1-lab-server.sh up        # install, download, verify, start (listens on :: behind the key)
+deploy/m1-lab/m1-lab.sh direct-link <m1>.local 'fe80::...%en5' <m1-campus-hostname>
+deploy/m1-lab/m1-lab.sh smoke && deploy/m1-lab/m1-lab.sh session
+```
+
+`direct-link` runs `forward.py` on this Mac: `127.0.0.1:18080` → the first reachable target, so the
+provider URL is unchanged. With a USB-C cable between the Macs, the M1's IPv6 link-local address keeps
+the traffic on the cable (the IPv4 169.254 address is often unroutable because Wi-Fi claims that
+subnet, and Node URLs cannot carry an IPv6 zone id, hence the forwarder). The key lives in
+`~/.config/m1-lab/api-key` (0600); `models.json` holds `!cat <that file>`, not the key.
+
+Measured on the lab M1 (2026-09-28, Qwen3.8-27B Q4_K_XL): prefill ~125 tok/s, decode ~12 tok/s, 9/9
+smoke checks and the harness tool call pass, turn-2 cache reuse 21 of 22.5K tokens. The agent's
+~12K-token system prompt costs ~95 s once per session; later turns reuse the cache.
+
 ## Models (`profiles.sh`)
 
 | profile | file | size | notes |
