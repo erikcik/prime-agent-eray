@@ -29,9 +29,10 @@ if [[ -n "${DEPLOY_GIT_SSH_KEY_FILE:-}" && -f "${DEPLOY_GIT_SSH_KEY_FILE}" ]]; t
 fi
 
 phase pull
-# The harness build regenerates tracked files under packages/ (e.g. models.generated.ts).
-# We never hand-edit packages/, so discard such build artefacts before a fast-forward pull.
-git checkout -- packages/ 2>/dev/null || true
+# Builds rewrite tracked files: packages/ (models.generated.ts, before build-harness.sh) and
+# observer/package-lock.json (`npm install` in the entrypoint). Nothing is hand-edited on the pod,
+# so discard that drift before a fast-forward pull.
+git checkout -- packages/ observer/package-lock.json 2>/dev/null || true
 before="$(git rev-parse HEAD)"
 log "at $(git rev-parse --short HEAD) on $(git rev-parse --abbrev-ref HEAD); fetching origin/${BRANCH}"
 git fetch --quiet origin "$BRANCH"
