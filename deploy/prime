@@ -1,175 +1,60 @@
 #!/usr/bin/env python3
-"""`prime`: open the harness on the RunPod pod from any Mac terminal.
+"""`prime`: open the harness in the sandbox VPS from any Mac terminal.
 
-    prime                  agents view of the pod: every live session, attach or start one from there
+    prime                  agents view: every live session, attach or start one from there
     prime new [args]       a new interactive session (args go to prime-agent)
-    prime <args>           any other prime-agent command on the pod (list, attach <agent>, send, ...)
-    prime ssh              a shell on the pod (agent env loaded)
-    prime web              open the observer web UI (bench) and copy its token to the clipboard
-    prime status           pod id, state, cost, ssh endpoint, web URL, idle-stop countdown
-    prime stop             stop the pod now (the observer also stops it after 30 idle minutes)
+    prime <args>           any other prime-agent command in the sandbox (list, attach <agent>, send, ...)
+    prime ssh              a shell in the sandbox container (agent env loaded)
+    prime host             a root shell on the VPS itself
+    prime web              open the observer web UI (/bench) at http://127.0.0.1:8790 and copy its token
+    prime status           container, observer, link
     prime link [stop|status]
-                           keep the lab M1 model reachable from the pod: reverse tunnel pod
-                           127.0.0.1:18080 -> this Mac's m1-lab forwarder (started by `prime` when
-                           the forwarder is up; never starts or keeps alive a stopped pod)
+                           the background ssh link every command starts: VPS 127.0.0.1:18080 -> this
+                           Mac's m1-lab forwarder (the lab M1 model) and this Mac's 127.0.0.1:8790 -> the
+                           observer. Reconnects by itself.
 
-A stopped pod is started automatically (about a minute) by any command that needs it.
-
-The pod is taken from $PRIME_POD, else deploy/.binding.json (shared with pod-bind.py), else the
-newest pod named prime-agent-eray. Its ssh port is re-resolved on every call because RunPod remaps
-22/tcp whenever a pod restarts. Install: ln -s <repo>/deploy/prime ~/.local/bin/prime
+The VPS is the ssh alias `prime-vps` (~/.ssh/config), overridable with $PRIME_VPS. The sandbox runs
+as the Docker container `prime-agent` there (deploy/vps/vps.sh). Install:
+ln -s <repo>/deploy/prime ~/.local/bin/prime
 """
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import shlex
+import socket
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
-from typing import NoReturn
 
 HERE = Path(os.path.realpath(__file__)).parent
-BINDING = HERE / ".binding.json"
 ENV_FILE = HERE / ".env"
-IDENTITY = Path.home() / ".ssh" / "prime-agent-pod"
-KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts_prime"
-POD_NAME = "prime-agent-eray"
-OBSERVER_PORT = 8790
+VPS = os.environ.get("PRIME_VPS", "prime-vps")
+CONTAINER = "prime-agent"
 REMOTE_HOME = "/workspace/app/deploy/prime-home.sh"
 STATE_DIR = Path.home() / ".config" / "prime"
 LINK_PID = STATE_DIR / "link.pid"
 LINK_LOG = STATE_DIR / "link.log"
 M1_PORT = 18080
+WEB_PORT = int(os.environ.get("PRIME_WEB_PORT", "8790"))
 
 
-def die(msg: str) -> NoReturn:
-    print(f"prime: {msg}", file=sys.stderr)
-    sys.exit(1)
+def listening(port: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(1)
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def api_key() -> str:
-    cfg = (Path.home() / ".runpod" / "config.toml").read_text()
-    m = re.search(r"apikey\s*=\s*['\"]?([^'\"\s]+)['\"]?", cfg)
-    if not m:
-        die("no apikey in ~/.runpod/config.toml")
-    return m.group(1)
+def ssh_base() -> list[str]:
+    return ["ssh", "-q", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8"]
 
 
-def gql(query: str, variables: dict | None = None) -> dict:
-    url = "https://api.runpod.io/graphql?api_key=" + urllib.parse.quote(api_key())
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"query": query, "variables": variables or {}}).encode(),
-        headers={"content-type": "application/json", "user-agent": "Mozilla/5.0 prime-agent-eray-prime"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as res:
-            return json.load(res)
-    except urllib.error.URLError as e:
-        die(f"RunPod API unreachable: {e}")
-
-
-POD_FIELDS = "id name desiredStatus costPerHr runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }"
-
-
-def find_pod() -> dict:
-    pod_id = os.environ.get("PRIME_POD")
-    if not pod_id and BINDING.exists():
-        pod_id = json.loads(BINDING.read_text()).get("pod")
-    if pod_id:
-        pod = (gql(f"query($id: String!) {{ pod(input: {{podId: $id}}) {{ {POD_FIELDS} }} }}", {"id": pod_id}).get("data") or {}).get("pod")
-        if pod:
-            return pod
-    pods = ((gql(f"{{ myself {{ pods {{ {POD_FIELDS} }} }} }}").get("data") or {}).get("myself") or {}).get("pods") or []
-    named = [p for p in pods if p.get("name") == POD_NAME]
-    if not named:
-        die(f"no pod found (tried {pod_id or 'no binding'} and name {POD_NAME}); deploy one: see deploy/pod.md")
-    running = [p for p in named if p.get("desiredStatus") == "RUNNING"]
-    return (running or named)[0]
-
-
-def public_ssh(pod: dict) -> tuple[str, int] | None:
-    for p in (pod.get("runtime") or {}).get("ports") or []:
-        if p.get("privatePort") == 22 and p.get("isIpPublic"):
-            return p["ip"], int(p["publicPort"])
-    return None
-
-
-def ssh_endpoint(pod: dict) -> tuple[str, int]:
-    endpoint = public_ssh(pod) if pod.get("desiredStatus") == "RUNNING" else None
-    if not endpoint:
-        die(f"pod {pod['id']} is {pod.get('desiredStatus')} with no public ssh port yet")
-    return endpoint
-
-
-def rest(method: str, path: str) -> None:
-    req = urllib.request.Request(
-        f"https://rest.runpod.io/v1{path}", method=method, headers={"authorization": f"Bearer {api_key()}"}
-    )
-    try:
-        urllib.request.urlopen(req, timeout=60).read()
-    except urllib.error.HTTPError as e:
-        die(f"RunPod {method} {path}: {e.code} {e.read().decode()[:300]}")
-
-
-def refetch(pod_id: str) -> dict:
-    return (gql(f"query($id: String!) {{ pod(input: {{podId: $id}}) {{ {POD_FIELDS} }} }}", {"id": pod_id}).get("data") or {}).get("pod") or {}
-
-
-def ssh_base(host: str, port: int) -> list[str]:
-    return [
-        "ssh", "-q",
-        "-i", str(IDENTITY), "-o", "IdentitiesOnly=yes",
-        "-p", str(port),
-        # The host key lives on the volume and survives pod replacement; ip:port does not.
-        "-o", "HostKeyAlias=prime-agent-pod",
-        "-o", f"UserKnownHostsFile={KNOWN_HOSTS}",
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8",
-    ]
-
-
-def ensure_running(pod: dict) -> dict:
-    """Start a stopped pod and wait until sshd answers and the entrypoint has written the agent env."""
-    pod_id = pod["id"]
-    if pod.get("desiredStatus") != "RUNNING":
-        print(f"prime: pod {pod_id} is {pod.get('desiredStatus')}; starting it (${pod.get('costPerHr')}/h)...", file=sys.stderr)
-        rest("POST", f"/pods/{pod_id}/start")
-    started = time.monotonic()
-    announced = False
-    while True:
-        endpoint = public_ssh(pod) if pod.get("desiredStatus") == "RUNNING" else None
-        if endpoint:
-            probe = [*ssh_base(*endpoint), "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", f"node@{endpoint[0]}", "test -r ~/.prime-env"]
-            if subprocess.run(probe, stdin=subprocess.DEVNULL, capture_output=True).returncode == 0:
-                return pod
-        if time.monotonic() - started > 600:
-            die(f"pod {pod_id} did not become reachable within 10 minutes; check the RunPod console logs")
-        if not announced:
-            print("prime: waiting for the pod to boot (sshd + agent env)...", file=sys.stderr)
-            announced = True
-        time.sleep(4)
-        pod = refetch(pod_id) or pod
-
-
-def web_url(pod: dict) -> str:
-    return f"https://{pod['id']}-{OBSERVER_PORT}.proxy.runpod.net"
-
-
-def ssh(pod: dict, remote_args: list[str]) -> None:
-    pod = ensure_running(pod)
-    host, port = ssh_endpoint(pod)
-    # Carry the local terminal's colour/identity hints: sshd forwards TERM only.
-    passthrough = [f"{k}={shlex.quote(os.environ[k])}" for k in ("COLORTERM", "TERM_PROGRAM") if os.environ.get(k)]
-    remote = " ".join([*(["env", *passthrough] if passthrough else []), "bash", REMOTE_HOME, *map(shlex.quote, remote_args)])
-    os.execvp("ssh", [*ssh_base(host, port), "-t", f"node@{host}", remote])
+def exec_in_sandbox(args: list[str]) -> None:
+    # sshd forwards TERM only; the TUI also reads COLORTERM / TERM_PROGRAM for colour depth.
+    env = [f"-e {k}={shlex.quote(os.environ[k])}" for k in ("TERM", "COLORTERM", "TERM_PROGRAM") if os.environ.get(k)]
+    remote = " ".join(["docker exec -it -u node", *env, CONTAINER, "bash", REMOTE_HOME, *map(shlex.quote, args)])
+    os.execvp("ssh", [*ssh_base(), "-t", VPS, remote])
 
 
 def observer_token() -> str | None:
@@ -179,31 +64,6 @@ def observer_token() -> str | None:
         if line.startswith("PRIME_OBSERVER_TOKEN="):
             return line.split("=", 1)[1].strip().strip("'\"")
     return None
-
-
-def idle_line(pod: dict) -> str:
-    token = observer_token()
-    if pod.get("desiredStatus") != "RUNNING" or not token:
-        return "-"
-    req = urllib.request.Request(web_url(pod) + "/api/idle", headers={"authorization": f"Bearer {token}", "user-agent": "Mozilla/5.0 prime"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as res:
-            s = json.load(res)
-    except (urllib.error.URLError, TimeoutError, ValueError) as e:
-        return f"unknown ({e})"
-    if not s.get("enabled"):
-        return "idle stop disabled"
-    if s.get("busy"):
-        return "busy: " + "; ".join(s["busy"])
-    return f"idle; stops at {s.get('stopAt')} unless something starts"
-
-
-def m1_forwarder_up() -> bool:
-    import socket
-
-    with socket.socket() as s:
-        s.settimeout(1)
-        return s.connect_ex(("127.0.0.1", M1_PORT)) == 0
 
 
 def link_pid() -> int | None:
@@ -218,45 +78,29 @@ def link_pid() -> int | None:
 def link_start(quiet: bool = False) -> None:
     if link_pid():
         return
-    if not m1_forwarder_up():
-        if not quiet:
-            die(f"nothing listens on 127.0.0.1:{M1_PORT}; start the M1 first: deploy/m1-lab/m1-lab.sh direct-link ...")
-        return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    log = open(LINK_LOG, "a")
-    proc = subprocess.Popen(
-        [sys.executable, os.path.realpath(__file__), "__link-loop"],
-        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-    )
+    with open(LINK_LOG, "a") as log:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.realpath(__file__), "__link-loop"],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+        )
     LINK_PID.write_text(f"{proc.pid}\n")
     if not quiet:
-        print(f"prime: M1 link started (pid {proc.pid}, log {LINK_LOG})")
+        print(f"prime: link started (pid {proc.pid}, log {LINK_LOG})")
 
 
 def link_loop() -> None:
-    """Hold `ssh -N -R` open; re-resolve the pod each round (ports move on restart). Never starts the pod."""
+    """Hold one ssh open with both forwards; reconnect on any exit."""
     def log(msg: str) -> None:
         print(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}", flush=True)
 
     while True:
-        if not m1_forwarder_up():
-            log(f"127.0.0.1:{M1_PORT} is down (M1 forwarder); retrying in 30 s")
-            time.sleep(30)
-            continue
-        try:
-            pod = find_pod()
-        except SystemExit:
-            time.sleep(30)
-            continue
-        endpoint = public_ssh(pod) if pod.get("desiredStatus") == "RUNNING" else None
-        if not endpoint:
-            time.sleep(30)
-            continue
-        host, port = endpoint
-        log(f"linking pod {pod['id']} ({host}:{port}) 127.0.0.1:{M1_PORT} -> this Mac")
+        log(f"linking {VPS}: remote 127.0.0.1:{M1_PORT} -> mac, mac 127.0.0.1:{WEB_PORT} -> observer")
+        # The remote forward connects lazily, so it is harmless while the M1 forwarder is down.
         code = subprocess.run(
-            [*ssh_base(host, port), "-N", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
-             "-R", f"127.0.0.1:{M1_PORT}:127.0.0.1:{M1_PORT}", f"node@{host}"],
+            [*ssh_base(), "-N", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
+             "-R", f"127.0.0.1:{M1_PORT}:127.0.0.1:{M1_PORT}",
+             "-L", f"127.0.0.1:{WEB_PORT}:127.0.0.1:8790", VPS],
             stdin=subprocess.DEVNULL,
         ).returncode
         log(f"link exited ({code}); reconnecting in 5 s")
@@ -268,13 +112,43 @@ def link_command(args: list[str]) -> None:
     if args[:1] == ["stop"]:
         if pid:
             os.killpg(pid, 15)
-            print(f"prime: M1 link stopped (pid {pid})")
+            print(f"prime: link stopped (pid {pid})")
         LINK_PID.unlink(missing_ok=True)
         return
     if args[:1] == ["status"]:
-        print(f"link     {'running (pid %d)' % pid if pid else 'stopped'}; M1 forwarder 127.0.0.1:{M1_PORT} {'up' if m1_forwarder_up() else 'down'}")
+        print(f"link     {'running (pid %d)' % pid if pid else 'stopped'}; "
+              f"M1 forwarder 127.0.0.1:{M1_PORT} {'up' if listening(M1_PORT) else 'down'}; "
+              f"web 127.0.0.1:{WEB_PORT} {'up' if listening(WEB_PORT) else 'down'}")
         return
     link_start()
+
+
+def status() -> None:
+    out = subprocess.run(
+        [*ssh_base(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", VPS,
+         f"docker ps -a --filter name=^{CONTAINER}$ --format '{{{{.Status}}}}'; curl -s -m 5 http://127.0.0.1:8790/api/health"],
+        capture_output=True, text=True,
+    )
+    lines = out.stdout.strip().splitlines() or ["unreachable"]
+    print(f"vps      {VPS} ({'reachable' if out.returncode == 0 else 'UNREACHABLE: ' + out.stderr.strip()[:120]})")
+    print(f"sandbox  {lines[0]}")
+    print(f"observer {lines[1][:120] if len(lines) > 1 else 'down'}")
+    link_command(["status"])
+
+
+def web() -> None:
+    link_start(quiet=True)
+    for _ in range(20):
+        if listening(WEB_PORT):
+            break
+        time.sleep(0.5)
+    else:
+        sys.exit(f"prime: 127.0.0.1:{WEB_PORT} did not come up; see {LINK_LOG}")
+    token = observer_token()
+    if token:
+        subprocess.run(["pbcopy"], input=token.encode(), check=True)
+        print("prime: observer token copied to the clipboard (paste it on the login page once)")
+    subprocess.run(["open", f"http://127.0.0.1:{WEB_PORT}/bench"], check=False)
 
 
 def main(argv: list[str]) -> None:
@@ -287,34 +161,18 @@ def main(argv: list[str]) -> None:
     if argv[:1] == ["link"]:
         link_command(argv[1:])
         return
-    pod = find_pod()
     if argv[:1] == ["status"]:
-        found = public_ssh(pod) if pod.get("desiredStatus") == "RUNNING" else None
-        endpoint = f"{found[0]}:{found[1]}" if found else "-"
-        print(f"pod      {pod['id']} ({pod.get('name')})")
-        print(f"state    {pod.get('desiredStatus')}  ${pod.get('costPerHr')}/h  up {((pod.get('runtime') or {}).get('uptimeInSeconds') or 0) // 60} min")
-        print(f"ssh      {endpoint}")
-        print(f"web      {web_url(pod)}")
-        print(f"idle     {idle_line(pod)}")
-        link_command(["status"])
-        return
-    if argv[:1] == ["stop"]:
-        rest("POST", f"/pods/{pod['id']}/stop")
-        print(f"prime: pod {pod['id']} stopping")
+        status()
         return
     if argv[:1] == ["web"]:
-        pod = ensure_running(pod)
-        token = observer_token()
-        if token:
-            subprocess.run(["pbcopy"], input=token.encode(), check=True)
-            print("prime: observer token copied to the clipboard (paste it on the login page once per pod)")
-        subprocess.run(["open", web_url(pod) + "/bench"], check=False)
+        web()
         return
     link_start(quiet=True)
+    if argv[:1] == ["host"]:
+        os.execvp("ssh", [*ssh_base(), "-t", VPS])
     if argv[:1] == ["ssh"]:
-        ssh(pod, ["__shell__"])
-        return
-    ssh(pod, argv)
+        exec_in_sandbox(["__shell__"])
+    exec_in_sandbox(argv)
 
 
 if __name__ == "__main__":
