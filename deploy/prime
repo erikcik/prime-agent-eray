@@ -196,11 +196,8 @@ def main(argv: list[str]) -> None:
         return
     pod = find_pod()
     if argv[:1] == ["status"]:
-        try:
-            host, port = ssh_endpoint(pod)
-            endpoint = f"{host}:{port}"
-        except SystemExit:
-            endpoint = "-"
+        found = public_ssh(pod) if pod.get("desiredStatus") == "RUNNING" else None
+        endpoint = f"{found[0]}:{found[1]}" if found else "-"
         print(f"pod      {pod['id']} ({pod.get('name')})")
         print(f"state    {pod.get('desiredStatus')}  ${pod.get('costPerHr')}/h  up {((pod.get('runtime') or {}).get('uptimeInSeconds') or 0) // 60} min")
         print(f"ssh      {endpoint}")
