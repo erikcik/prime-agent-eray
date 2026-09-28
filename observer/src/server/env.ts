@@ -20,6 +20,8 @@ export interface ObserverEnv {
 	isDev: boolean;
 	/** Cap for one composer attachment. Through the RunPod proxy Cloudflare rejects >~100 MB first. */
 	maxUploadBytes: number;
+	/** Stop the RunPod pod after this many idle minutes; 0 disables. Only active on a pod with an API key. */
+	idleStopMinutes: number;
 }
 
 /** Attachment cap; env override must be a positive integer or we keep the default. */
@@ -28,6 +30,13 @@ export const DEFAULT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 function parsePositiveInt(value: string | undefined, fallback: number): number {
 	const n = Number.parseInt((value ?? "").trim(), 10);
 	return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+export const DEFAULT_IDLE_STOP_MINUTES = 30;
+
+function parseIdleMinutes(value: string | undefined): number {
+	const n = Number.parseInt((value ?? "").trim(), 10);
+	return Number.isFinite(n) && n >= 0 ? n : DEFAULT_IDLE_STOP_MINUTES;
 }
 
 function parseList(value: string | undefined): string[] {
@@ -85,5 +94,6 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): ObserverEnv {
 		dataDir: resolve(agentDir, "observer"),
 		isDev: env.NODE_ENV === "development",
 		maxUploadBytes: parsePositiveInt(env.PRIME_OBSERVER_MAX_UPLOAD_BYTES, DEFAULT_MAX_UPLOAD_BYTES),
+		idleStopMinutes: parseIdleMinutes(env.PRIME_OBSERVER_IDLE_STOP_MINUTES),
 	};
 }

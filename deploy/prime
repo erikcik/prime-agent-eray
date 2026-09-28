@@ -6,7 +6,10 @@
     prime <args>           any other prime-agent command on the pod (list, attach <agent>, send, ...)
     prime ssh              a shell on the pod (agent env loaded)
     prime web              open the observer web UI (bench) and copy its token to the clipboard
-    prime status           pod id, state, cost, ssh endpoint, web URL
+    prime status           pod id, state, cost, ssh endpoint, web URL, idle-stop countdown
+    prime stop             stop the pod now (the observer also stops it after 30 idle minutes)
+
+A stopped pod is started automatically (about a minute) by any command that needs it.
 
 The pod is taken from $PRIME_POD, else deploy/.binding.json (shared with pod-bind.py), else the
 newest pod named prime-agent-eray. Its ssh port is re-resolved on every call because RunPod remaps
@@ -21,10 +24,12 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import NoReturn
 
 HERE = Path(os.path.realpath(__file__)).parent
 BINDING = HERE / ".binding.json"
@@ -36,7 +41,7 @@ OBSERVER_PORT = 8790
 REMOTE_HOME = "/workspace/app/deploy/prime-home.sh"
 
 
-def die(msg: str) -> None:
+def die(msg: str) -> NoReturn:
     print(f"prime: {msg}", file=sys.stderr)
     sys.exit(1)
 
@@ -61,7 +66,6 @@ def gql(query: str, variables: dict | None = None) -> dict:
             return json.load(res)
     except urllib.error.URLError as e:
         die(f"RunPod API unreachable: {e}")
-    return {}
 
 
 POD_FIELDS = "id name desiredStatus costPerHr runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }"
@@ -83,27 +87,37 @@ def find_pod() -> dict:
     return (running or named)[0]
 
 
-def ssh_endpoint(pod: dict) -> tuple[str, int]:
-    if pod.get("desiredStatus") != "RUNNING":
-        die(f"pod {pod['id']} is {pod.get('desiredStatus')}; start it in the RunPod console or with the runpod MCP")
+def public_ssh(pod: dict) -> tuple[str, int] | None:
     for p in (pod.get("runtime") or {}).get("ports") or []:
         if p.get("privatePort") == 22 and p.get("isIpPublic"):
             return p["ip"], int(p["publicPort"])
-    die(f"pod {pod['id']} has no public ssh port yet (still booting?)")
-    return "", 0
+    return None
 
 
-def web_url(pod: dict) -> str:
-    return f"https://{pod['id']}-{OBSERVER_PORT}.proxy.runpod.net"
+def ssh_endpoint(pod: dict) -> tuple[str, int]:
+    endpoint = public_ssh(pod) if pod.get("desiredStatus") == "RUNNING" else None
+    if not endpoint:
+        die(f"pod {pod['id']} is {pod.get('desiredStatus')} with no public ssh port yet")
+    return endpoint
 
 
-def ssh(pod: dict, remote_args: list[str]) -> None:
-    host, port = ssh_endpoint(pod)
-    # Carry the local terminal's colour/identity hints: sshd forwards TERM only.
-    passthrough = [f"{k}={shlex.quote(os.environ[k])}" for k in ("COLORTERM", "TERM_PROGRAM") if os.environ.get(k)]
-    remote = " ".join([*(["env", *passthrough] if passthrough else []), "bash", REMOTE_HOME, *map(shlex.quote, remote_args)])
-    cmd = [
-        "ssh", "-t", "-q",
+def rest(method: str, path: str) -> None:
+    req = urllib.request.Request(
+        f"https://rest.runpod.io/v1{path}", method=method, headers={"authorization": f"Bearer {api_key()}"}
+    )
+    try:
+        urllib.request.urlopen(req, timeout=60).read()
+    except urllib.error.HTTPError as e:
+        die(f"RunPod {method} {path}: {e.code} {e.read().decode()[:300]}")
+
+
+def refetch(pod_id: str) -> dict:
+    return (gql(f"query($id: String!) {{ pod(input: {{podId: $id}}) {{ {POD_FIELDS} }} }}", {"id": pod_id}).get("data") or {}).get("pod") or {}
+
+
+def ssh_base(host: str, port: int) -> list[str]:
+    return [
+        "ssh", "-q",
         "-i", str(IDENTITY), "-o", "IdentitiesOnly=yes",
         "-p", str(port),
         # The host key lives on the volume and survives pod replacement; ip:port does not.
@@ -111,9 +125,43 @@ def ssh(pod: dict, remote_args: list[str]) -> None:
         "-o", f"UserKnownHostsFile={KNOWN_HOSTS}",
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8",
-        f"node@{host}", remote,
     ]
-    os.execvp("ssh", cmd)
+
+
+def ensure_running(pod: dict) -> dict:
+    """Start a stopped pod and wait until sshd answers and the entrypoint has written the agent env."""
+    pod_id = pod["id"]
+    if pod.get("desiredStatus") != "RUNNING":
+        print(f"prime: pod {pod_id} is {pod.get('desiredStatus')}; starting it (${pod.get('costPerHr')}/h)...", file=sys.stderr)
+        rest("POST", f"/pods/{pod_id}/start")
+    started = time.monotonic()
+    announced = False
+    while True:
+        endpoint = public_ssh(pod) if pod.get("desiredStatus") == "RUNNING" else None
+        if endpoint:
+            probe = [*ssh_base(*endpoint), "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", f"node@{endpoint[0]}", "test -r ~/.prime-env"]
+            if subprocess.run(probe, stdin=subprocess.DEVNULL, capture_output=True).returncode == 0:
+                return pod
+        if time.monotonic() - started > 600:
+            die(f"pod {pod_id} did not become reachable within 10 minutes; check the RunPod console logs")
+        if not announced:
+            print("prime: waiting for the pod to boot (sshd + agent env)...", file=sys.stderr)
+            announced = True
+        time.sleep(4)
+        pod = refetch(pod_id) or pod
+
+
+def web_url(pod: dict) -> str:
+    return f"https://{pod['id']}-{OBSERVER_PORT}.proxy.runpod.net"
+
+
+def ssh(pod: dict, remote_args: list[str]) -> None:
+    pod = ensure_running(pod)
+    host, port = ssh_endpoint(pod)
+    # Carry the local terminal's colour/identity hints: sshd forwards TERM only.
+    passthrough = [f"{k}={shlex.quote(os.environ[k])}" for k in ("COLORTERM", "TERM_PROGRAM") if os.environ.get(k)]
+    remote = " ".join([*(["env", *passthrough] if passthrough else []), "bash", REMOTE_HOME, *map(shlex.quote, remote_args)])
+    os.execvp("ssh", [*ssh_base(host, port), "-t", f"node@{host}", remote])
 
 
 def observer_token() -> str | None:
@@ -123,6 +171,23 @@ def observer_token() -> str | None:
         if line.startswith("PRIME_OBSERVER_TOKEN="):
             return line.split("=", 1)[1].strip().strip("'\"")
     return None
+
+
+def idle_line(pod: dict) -> str:
+    token = observer_token()
+    if pod.get("desiredStatus") != "RUNNING" or not token:
+        return "-"
+    req = urllib.request.Request(web_url(pod) + "/api/idle", headers={"authorization": f"Bearer {token}", "user-agent": "Mozilla/5.0 prime"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            s = json.load(res)
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        return f"unknown ({e})"
+    if not s.get("enabled"):
+        return "idle stop disabled"
+    if s.get("busy"):
+        return "busy: " + "; ".join(s["busy"])
+    return f"idle; stops at {s.get('stopAt')} unless something starts"
 
 
 def main(argv: list[str]) -> None:
@@ -140,8 +205,14 @@ def main(argv: list[str]) -> None:
         print(f"state    {pod.get('desiredStatus')}  ${pod.get('costPerHr')}/h  up {((pod.get('runtime') or {}).get('uptimeInSeconds') or 0) // 60} min")
         print(f"ssh      {endpoint}")
         print(f"web      {web_url(pod)}")
+        print(f"idle     {idle_line(pod)}")
+        return
+    if argv[:1] == ["stop"]:
+        rest("POST", f"/pods/{pod['id']}/stop")
+        print(f"prime: pod {pod['id']} stopping")
         return
     if argv[:1] == ["web"]:
+        pod = ensure_running(pod)
         token = observer_token()
         if token:
             subprocess.run(["pbcopy"], input=token.encode(), check=True)

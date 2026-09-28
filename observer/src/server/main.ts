@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
-import { VERSION as HARNESS_VERSION } from "@earendil-works/pi-coding-agent";
+import { VERSION as HARNESS_VERSION, type SessionSummary } from "@earendil-works/pi-coding-agent";
 import { TERM_WS_PATH, type ServerMessage } from "../shared/ws.ts";
 import { hasQueryToken, httpAuthorized } from "./auth.ts";
 import { CommsIndex } from "./comms/comms-index.ts";
@@ -16,6 +16,7 @@ import { ModelPodService } from "./model-pod/service.ts";
 import { agentPaths } from "./disk/paths.ts";
 import { AgentDirWatcher } from "./disk/watcher.ts";
 import { loadEnv } from "./env.ts";
+import { IdleStopService, stopRunpodPod } from "./idle/idle-stop.ts";
 import { HtmlExporter } from "./export/html-export.ts";
 import { FleetService } from "./fleet/fleet-service.ts";
 import { Router, sendJson } from "./http/router.ts";
@@ -187,6 +188,44 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 	});
 	registerBenchRoutes(router, bench);
 
+	// Stop-when-idle for the RunPod pod; the Mac `prime` command starts it again on demand.
+	const podId = process.env.RUNPOD_POD_ID;
+	const runpodKey = process.env.RUNPOD_API_KEY;
+	const idle =
+		env.idleStopMinutes > 0 && podId && runpodKey
+			? new IdleStopService({
+					idleMinutes: env.idleStopMinutes,
+					dataDir: env.dataDir,
+					probe: () => idleBusyReasons(),
+					stop: () => stopRunpodPod(podId, runpodKey),
+				})
+			: undefined;
+	router.get("/api/idle", async () => idle?.status() ?? { enabled: false });
+
+	async function idleBusyReasons(): Promise<string[]> {
+		const reasons: string[] = [];
+		const label = (n: { name?: string; sessionId: string }) => n.name ?? n.sessionId.slice(0, 8);
+		for (const n of fleet.allNodes()) {
+			if (n.status === "running" || n.isStreaming || n.isRunningTools) reasons.push(`agent ${label(n)} is working`);
+			else if (n.activeSessionId && (n.hasHeartbeat || n.hasSchedules)) reasons.push(`agent ${label(n)} has live schedules`);
+		}
+		const client = bridge.current;
+		if (client?.isConnected) {
+			const res = await client.request({ type: "list" } as never, 15_000);
+			if (!res.success) throw new Error(`daemon list failed: ${res.error ?? "unknown"}`);
+			const sessions = (res.data as { sessions?: SessionSummary[] }).sessions ?? [];
+			for (const s of sessions) {
+				if ((s.attachedClients ?? 0) > 0) reasons.push(`${s.attachedClients} client(s) attached to ${s.sessionName ?? s.sessionId.slice(0, 8)}`);
+			}
+		}
+		if (terminals.openCount > 0) reasons.push(`${terminals.openCount} web terminal(s) open`);
+		const jobs = bench.store.listJobs().filter((j) => j.status === "running").length;
+		if (jobs > 0) reasons.push(`${jobs} bench job(s) running`);
+		const runs = bench.store.listRuns().filter((r) => r.status === "running").length;
+		if (runs > 0) reasons.push(`${runs} bench run(s) in progress`);
+		return reasons;
+	}
+
 	const server = createServer(async (req, res) => {
 		const url = req.url ?? "/";
 		if (url.startsWith("/api/")) {
@@ -227,6 +266,7 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 		hub.closeAll(1012, "restarting");
 		terminals.closeAll(1012, "restarting");
 		bench.stop();
+		idle?.stopTimer();
 		watcher.stop();
 		bridge.stop();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -240,6 +280,7 @@ export async function startServer(overrides: Partial<NodeJS.ProcessEnv> = {}): P
 	bridge.start();
 	await fleet.start();
 	bench.start();
+	idle?.start();
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
 		server.listen(env.port, env.host, () => resolve());

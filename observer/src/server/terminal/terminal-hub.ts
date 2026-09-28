@@ -58,6 +58,10 @@ export class TerminalHub {
 
 	constructor(private readonly opts: TerminalHubOptions) {}
 
+	get openCount(): number {
+		return this.conns.size;
+	}
+
 	handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
 		const origin = req.headers.origin;
 		if (origin && !originAllowed(origin, this.opts.allowedOrigins)) {
