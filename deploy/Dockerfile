@@ -8,7 +8,7 @@
 #   * Runs as uid 1000 (`node`), PID 1 = tini, root only for the ownership fix + sshd start.
 #
 # Build (from repo root, amd64 for pods):
-#   docker buildx build --platform linux/amd64 -f deploy/Dockerfile -t ghcr.io/erikcik/prime-agent-eray:<tag> --push .
+#   gh workflow run pod-image.yml -f tag=<tag>   (native amd64 on GitHub Actions -> ghcr.io/erikcik/prime-agent-pod)
 
 ARG NODE_IMAGE=node:22-bookworm-slim
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.9.7

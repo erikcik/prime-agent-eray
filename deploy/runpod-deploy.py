@@ -13,7 +13,7 @@ if __name__=="__main__" and len(sys.argv)==1:
 # ---------------------------------------------------------------------------------------------
 # Usage:
 #   python3 deploy/runpod-deploy.py                       # auth probe
-#   python3 deploy/runpod-deploy.py deploy <env.json>     # create the cpu3g-4-16 pod from ENV json
+#   python3 deploy/runpod-deploy.py deploy <env.json>     # create the pod from ENV json
 #   python3 deploy/runpod-deploy.py pod <podId>           # show status + port mappings
 # The env json is {"PRIME_OBSERVER_TOKEN": "...", "NANO_GPT_API_KEY": "...", ...} (never commit it).
 def deploy(env_path, instance=None, volume=None, template=None, dc=None,
@@ -24,7 +24,7 @@ def deploy(env_path, instance=None, volume=None, template=None, dc=None,
     volume   = volume   or os.environ.get("RUNPOD_VOLUME",   "7chuik9v2b")
     template = template or os.environ.get("RUNPOD_TEMPLATE", "")
     dc       = dc       or os.environ.get("RUNPOD_DC",       "EU-RO-1")
-    image    = image    or os.environ.get("RUNPOD_IMAGE",    "ghcr.io/erikcik/prime-agent-eray:0.1.2")
+    image    = image    or os.environ.get("RUNPOD_IMAGE",    "ghcr.io/erikcik/prime-agent-pod:0.1.3")
     registry = registry or os.environ.get("RUNPOD_REGISTRY", "cmtgfealr000h6h832efsrbit")
     name     = name     or os.environ.get("RUNPOD_NAME",     "prime-agent-eray")
     disk     = disk     or int(os.environ.get("RUNPOD_DISK_GB", "40"))
