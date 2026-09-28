@@ -1,4 +1,4 @@
-# sshd for the pod's file-mirror channel (deploy/pod-bind.py). Key-only, single user, no forwarding.
+# sshd for the pod: file mirror (deploy/pod-bind.py), the `prime` TUI, and the M1 model link. Key-only, single user.
 Port 22
 AddressFamily inet
 HostKey /etc/ssh/ssh_host_ed25519_key
@@ -11,7 +11,10 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
 UsePAM no
-AllowTcpForwarding no
+# Remote forwarding only, and only onto the pod's loopback :18080: the Mac's `prime link` carries the
+# lab M1's model server (m1-lab provider) to agents on the pod. Nothing else can be forwarded.
+AllowTcpForwarding remote
+PermitListen 127.0.0.1:18080
 AllowAgentForwarding no
 X11Forwarding no
 PermitTunnel no

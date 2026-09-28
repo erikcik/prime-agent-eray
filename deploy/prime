@@ -8,6 +8,10 @@
     prime web              open the observer web UI (bench) and copy its token to the clipboard
     prime status           pod id, state, cost, ssh endpoint, web URL, idle-stop countdown
     prime stop             stop the pod now (the observer also stops it after 30 idle minutes)
+    prime link [stop|status]
+                           keep the lab M1 model reachable from the pod: reverse tunnel pod
+                           127.0.0.1:18080 -> this Mac's m1-lab forwarder (started by `prime` when
+                           the forwarder is up; never starts or keeps alive a stopped pod)
 
 A stopped pod is started automatically (about a minute) by any command that needs it.
 
@@ -39,6 +43,10 @@ KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts_prime"
 POD_NAME = "prime-agent-eray"
 OBSERVER_PORT = 8790
 REMOTE_HOME = "/workspace/app/deploy/prime-home.sh"
+STATE_DIR = Path.home() / ".config" / "prime"
+LINK_PID = STATE_DIR / "link.pid"
+LINK_LOG = STATE_DIR / "link.log"
+M1_PORT = 18080
 
 
 def die(msg: str) -> NoReturn:
@@ -190,9 +198,94 @@ def idle_line(pod: dict) -> str:
     return f"idle; stops at {s.get('stopAt')} unless something starts"
 
 
+def m1_forwarder_up() -> bool:
+    import socket
+
+    with socket.socket() as s:
+        s.settimeout(1)
+        return s.connect_ex(("127.0.0.1", M1_PORT)) == 0
+
+
+def link_pid() -> int | None:
+    try:
+        pid = int(LINK_PID.read_text().strip())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def link_start(quiet: bool = False) -> None:
+    if link_pid():
+        return
+    if not m1_forwarder_up():
+        if not quiet:
+            die(f"nothing listens on 127.0.0.1:{M1_PORT}; start the M1 first: deploy/m1-lab/m1-lab.sh direct-link ...")
+        return
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    log = open(LINK_LOG, "a")
+    proc = subprocess.Popen(
+        [sys.executable, os.path.realpath(__file__), "__link-loop"],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+    )
+    LINK_PID.write_text(f"{proc.pid}\n")
+    if not quiet:
+        print(f"prime: M1 link started (pid {proc.pid}, log {LINK_LOG})")
+
+
+def link_loop() -> None:
+    """Hold `ssh -N -R` open; re-resolve the pod each round (ports move on restart). Never starts the pod."""
+    def log(msg: str) -> None:
+        print(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {msg}", flush=True)
+
+    while True:
+        if not m1_forwarder_up():
+            log(f"127.0.0.1:{M1_PORT} is down (M1 forwarder); retrying in 30 s")
+            time.sleep(30)
+            continue
+        try:
+            pod = find_pod()
+        except SystemExit:
+            time.sleep(30)
+            continue
+        endpoint = public_ssh(pod) if pod.get("desiredStatus") == "RUNNING" else None
+        if not endpoint:
+            time.sleep(30)
+            continue
+        host, port = endpoint
+        log(f"linking pod {pod['id']} ({host}:{port}) 127.0.0.1:{M1_PORT} -> this Mac")
+        code = subprocess.run(
+            [*ssh_base(host, port), "-N", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
+             "-R", f"127.0.0.1:{M1_PORT}:127.0.0.1:{M1_PORT}", f"node@{host}"],
+            stdin=subprocess.DEVNULL,
+        ).returncode
+        log(f"link exited ({code}); reconnecting in 5 s")
+        time.sleep(5)
+
+
+def link_command(args: list[str]) -> None:
+    pid = link_pid()
+    if args[:1] == ["stop"]:
+        if pid:
+            os.killpg(pid, 15)
+            print(f"prime: M1 link stopped (pid {pid})")
+        LINK_PID.unlink(missing_ok=True)
+        return
+    if args[:1] == ["status"]:
+        print(f"link     {'running (pid %d)' % pid if pid else 'stopped'}; M1 forwarder 127.0.0.1:{M1_PORT} {'up' if m1_forwarder_up() else 'down'}")
+        return
+    link_start()
+
+
 def main(argv: list[str]) -> None:
     if argv[:1] in (["-h"], ["--help"], ["help"]):
         print(__doc__.strip())
+        return
+    if argv[:1] == ["__link-loop"]:
+        link_loop()
+        return
+    if argv[:1] == ["link"]:
+        link_command(argv[1:])
         return
     pod = find_pod()
     if argv[:1] == ["status"]:
@@ -203,6 +296,7 @@ def main(argv: list[str]) -> None:
         print(f"ssh      {endpoint}")
         print(f"web      {web_url(pod)}")
         print(f"idle     {idle_line(pod)}")
+        link_command(["status"])
         return
     if argv[:1] == ["stop"]:
         rest("POST", f"/pods/{pod['id']}/stop")
@@ -216,6 +310,7 @@ def main(argv: list[str]) -> None:
             print("prime: observer token copied to the clipboard (paste it on the login page once per pod)")
         subprocess.run(["open", web_url(pod) + "/bench"], check=False)
         return
+    link_start(quiet=True)
     if argv[:1] == ["ssh"]:
         ssh(pod, ["__shell__"])
         return
