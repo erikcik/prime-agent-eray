@@ -1,0 +1,1 @@
+- Added a bundled `purchase` skill: with `purchase.budget` set in global settings, the agent can request payments that wait for an Approve / Reject dialog in the attached terminal, receive the configured card only after approval, and ask the operator for 3-D Secure codes.

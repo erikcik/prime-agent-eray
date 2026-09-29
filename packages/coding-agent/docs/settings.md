@@ -126,6 +126,35 @@ prime-agent --offline
 }
 ```
 
+### Purchases
+
+Gives the top-level agent a spending budget through the bundled `purchase` skill. Every purchase opens an Approve / Reject dialog in the attached terminal; the card is returned to the agent only after approval. With no terminal attached, requests are rejected. Read from global settings only; a project `settings.json` cannot enable it.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `purchase.budget` | number | unset | One-time total budget. Purchasing is off unless this is set and positive |
+| `purchase.currency` | string | `"USD"` | Currency of the budget and of every request |
+| `purchase.card.number` | string | - | Card number: `!command`, env var name, or literal (same resolution as API keys) |
+| `purchase.card.expiry` | string | - | Expiry, e.g. `12/29` |
+| `purchase.card.cvc` | string | - | CVC |
+| `purchase.card.name` | string | - | Cardholder name (optional) |
+
+```json
+{
+  "purchase": {
+    "budget": 300,
+    "currency": "USD",
+    "card": {
+      "number": "!op read 'op://Agent/Business card/number'",
+      "expiry": "!op read 'op://Agent/Business card/expiry'",
+      "cvc": "!op read 'op://Agent/Business card/cvc'"
+    }
+  }
+}
+```
+
+Card fields are resolved only after a purchase is approved. Decisions are appended to `~/.prime/agent/purchases.jsonl` (without card details); spent budget is the sum of approved amounts there. The budget is a harness guardrail, not a hard limit: the agent runs with the same OS access as the harness, so set the card's own limit at the bank as the hard ceiling.
+
 ### Branch Summary
 
 | Setting | Type | Default | Description |

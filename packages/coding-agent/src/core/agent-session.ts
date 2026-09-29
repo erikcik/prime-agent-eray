@@ -34,6 +34,7 @@ import {
 	resetApiProviders,
 	supportsFastMode,
 } from "@earendil-works/pi-ai";
+import { getAgentDir } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
@@ -188,6 +189,12 @@ import {
 import type { ModelRegistry } from "./model-registry.js";
 import { throwIfPromptAdmissionCancelled } from "./prompt-admission.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
+import {
+	createPurchaseHostHandlers,
+	isPurchaseEnabled,
+	PURCHASE_LEDGER_FILE,
+	PURCHASE_SKILL_NAME,
+} from "./purchases.js";
 import {
 	type AutoRefineReason,
 	type AutoRefineReview,
@@ -9203,6 +9210,9 @@ export class AgentSession {
 		if (!this._agentObserveController || !this._rlmHeartbeatController) {
 			skills = skills.filter((skill) => skill.name !== ORCHESTRATION_HEARTBEAT_SKILL_NAME);
 		}
+		if (!this._purchasesAvailable()) {
+			skills = skills.filter((skill) => skill.name !== PURCHASE_SKILL_NAME);
+		}
 		return skills;
 	}
 
@@ -9307,7 +9317,23 @@ export class AgentSession {
 		if (this._mcpManager) {
 			Object.assign(handlers, this._mcpManager.hostHandlers());
 		}
+		if (this._purchasesAvailable()) {
+			Object.assign(
+				handlers,
+				createPurchaseHostHandlers({
+					settings: () => this.settingsManager.getPurchaseSettings(),
+					ledgerPath: join(this._agentDir ?? getAgentDir(), PURCHASE_LEDGER_FILE),
+					sessionId: () => this.sessionId,
+					ui: () => this._extensionUIContext,
+				}),
+			);
+		}
 		return handlers;
+	}
+
+	/** Subagents have no attached operator, so only the top-level session may ask to spend. */
+	private _purchasesAvailable(): boolean {
+		return this._rlmDepth === 0 && isPurchaseEnabled(this.settingsManager.getPurchaseSettings());
 	}
 
 	async reload(): Promise<void> {

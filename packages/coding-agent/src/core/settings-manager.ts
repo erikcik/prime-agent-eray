@@ -27,6 +27,19 @@ export interface AutoRefineSettings {
 	cooldownMs?: number; // default: 20 minutes
 }
 
+export interface PurchaseCardSettings {
+	number: string; // each field: "!command" (e.g. "!op read 'op://vault/item/number'"), env var name, or literal
+	expiry: string;
+	cvc: string;
+	name?: string;
+}
+
+export interface PurchaseSettings {
+	budget?: number; // one-time total; purchasing is off unless this is set and positive
+	currency?: string; // default: "USD"
+	card?: PurchaseCardSettings;
+}
+
 export interface ProviderRetrySettings {
 	timeoutMs?: number; // SDK/provider request timeout in milliseconds
 	maxRetries?: number; // SDK/provider retry attempts
@@ -144,6 +157,7 @@ export interface Settings {
 	theme?: string;
 	compaction?: CompactionSettings;
 	autoRefine?: AutoRefineSettings;
+	purchase?: PurchaseSettings; // read from global settings only
 	agentTraces?: AgentTracesSettings;
 	telemetry?: TelemetrySettings;
 	branchSummary?: BranchSummarySettings;
@@ -900,6 +914,12 @@ export class SettingsManager {
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
 		};
+	}
+
+	/** Global scope only: a project settings file must not grant spending power. */
+	getPurchaseSettings(): PurchaseSettings | undefined {
+		const purchase = this.globalSettings.purchase;
+		return purchase ? structuredClone(purchase) : undefined;
 	}
 
 	getAutoRefineSettings(): { enabled: boolean; turnInterval: number; compact: boolean; cooldownMs: number } {
