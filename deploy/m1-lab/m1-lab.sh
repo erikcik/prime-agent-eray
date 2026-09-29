@@ -388,9 +388,11 @@ cmd_direct_link() {
 sub="${1:-}"
 [ $# -gt 0 ] && shift
 # Keep the M1's copy of remote.sh/profiles.sh in step with this checkout before any remote command.
-case "$sub" in
-probe | pull | start | stop | status | logs | up | down) cmd_push ;;
-esac
+if ! direct_mode; then
+	case "$sub" in
+	probe | pull | start | stop | status | logs | up | down) cmd_push ;;
+	esac
+fi
 case "$sub" in
 discover) cmd_discover ;;
 connect) cmd_connect "$@" ;;
