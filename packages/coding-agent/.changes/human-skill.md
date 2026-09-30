@@ -1,0 +1,1 @@
+- Added the `human` skill: the top-level agent can ask the operator for codes, details, choices, or hand them a step such as an identity check, through a terminal dialog.

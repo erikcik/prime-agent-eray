@@ -37,6 +37,15 @@ describe("purchase skill gating", () => {
 		expect(handlerNames(child)).not.toContain("purchase.request");
 	});
 
+	it("gives the human handlers to the top-level session only", async () => {
+		const top = await createHarness();
+		const child = await createHarness({ rlmDepth: 1 });
+		harnesses.push(top, child);
+
+		expect(handlerNames(top)).toEqual(expect.arrayContaining(["human.ask", "human.choose", "human.handoff"]));
+		expect(handlerNames(child)).not.toContain("human.ask");
+	});
+
 	it("ignores a purchase block in project settings", () => {
 		const storage = new InMemorySettingsStorage();
 		storage.withLock("project", () => JSON.stringify({ purchase: { budget: 300 } }));

@@ -162,6 +162,7 @@ import {
 	validateGoalBudget,
 	validateGoalObjective,
 } from "./goals.js";
+import { createHumanHostHandlers, HUMAN_SKILL_NAME } from "./human.js";
 import type { HostRequestHandlers, KernelSentAgentMessage } from "./kernel/index.js";
 import { type RestoreResult, snapshotPathIn } from "./kernel/state-snapshot.js";
 import type { AcpMcpServerConfig } from "./mcp/acp-mcp-types.js";
@@ -9213,6 +9214,9 @@ export class AgentSession {
 		if (!this._purchasesAvailable()) {
 			skills = skills.filter((skill) => skill.name !== PURCHASE_SKILL_NAME);
 		}
+		if (this._rlmDepth !== 0) {
+			skills = skills.filter((skill) => skill.name !== HUMAN_SKILL_NAME);
+		}
 		return skills;
 	}
 
@@ -9316,6 +9320,9 @@ export class AgentSession {
 		}
 		if (this._mcpManager) {
 			Object.assign(handlers, this._mcpManager.hostHandlers());
+		}
+		if (this._rlmDepth === 0) {
+			Object.assign(handlers, createHumanHostHandlers({ ui: () => this._extensionUIContext }));
 		}
 		if (this._purchasesAvailable()) {
 			Object.assign(

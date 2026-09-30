@@ -187,15 +187,27 @@ write_shell_env() {
   local tmp
   tmp="$(mktemp "$HOME/.prime-env.XXXXXX")"
   chmod 600 "$tmp"
-  export -p | grep -v -E '^declare -x (PRIME_OBSERVER_TOKEN|OLDPWD|PWD|SHLVL|_)=' >"$tmp"
+  local skip="PRIME_OBSERVER_TOKEN|OLDPWD|PWD|SHLVL|_" name
+  for name in ${AGENT_UNSET[@]+"${AGENT_UNSET[@]}"}; do skip+="|$name"; done
+  export -p | grep -v -E "^declare -x ($skip)=" >"$tmp"
   mv "$tmp" "$HOME/.prime-env"
 }
+
+# PRIME_MODEL_ONLY=<provider>: agents (the daemon and ssh sessions) get no other provider's credentials,
+# so neither a session nor an rlm subagent can switch away from it. The observer keeps them.
+AGENT_UNSET=()
+DAEMON_ENV=(env)
+if [[ -n "${PRIME_MODEL_ONLY:-}" ]]; then
+  AGENT_UNSET=(ANTHROPIC_OAUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN NANO_GPT_API_KEY VLLM_API_KEY
+    OPENAI_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY PRIME_API_KEY)
+  for name in "${AGENT_UNSET[@]}"; do DAEMON_ENV+=(-u "$name"); done
+fi
 
 supervise_daemon() {
   local backoff=2
   while true; do
-    log "starting prime-agent daemon"
-    prime-agent --mode daemon
+    log "starting prime-agent daemon${PRIME_MODEL_ONLY:+ (models: $PRIME_MODEL_ONLY only)}"
+    "${DAEMON_ENV[@]}" prime-agent --mode daemon
     code=$?
     if [[ $code -eq 0 || $code -eq 87 ]]; then
       log "daemon exited ($code); restarting immediately"; backoff=2
