@@ -1,137 +1,194 @@
-<p align="center">
-  <a href="https://primeintellect.ai">
-    <picture>
-      <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/40c36e38-c5bd-4c5a-9cb3-f7b902cd155d">
-      <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/6414bc9b-126b-41ca-9307-9e982430cde8">
-      <img alt="Prime Intellect" src="https://github.com/user-attachments/assets/6414bc9b-126b-41ca-9307-9e982430cde8" width="312" style="max-width: 100%;">
-    </picture>
-  </a>
-</p>
-
-<h3 align="center">
-Prime Agent: A Self-Improving RLM Harness
-</h3>
+<h1 align="center">prime-agent-eray</h1>
 
 <p align="center">
-  <a href="packages/coding-agent/docs/index.md">Documentation</a> &bull;
-  <a href="https://github.com/PrimeIntellect-ai/verifiers">Verifiers</a> &bull;
-  <a href="https://github.com/PrimeIntellect-ai/prime-rl">PRIME-RL</a>
+  <strong>Observing, benchmarking and deploying a self-improving agent harness for long-horizon work</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/PrimeIntellect-ai/prime-agent/actions/workflows/ci.yml">
-    <img src="https://github.com/PrimeIntellect-ai/prime-agent/actions/workflows/ci.yml/badge.svg" alt="CI" />
-  </a>
-  <a href="https://github.com/PrimeIntellect-ai/prime-agent/actions/workflows/build-binaries.yml">
-    <img src="https://github.com/PrimeIntellect-ai/prime-agent/actions/workflows/build-binaries.yml/badge.svg" alt="Build Binaries" />
-  </a>
-  <a href="https://arxiv.org/abs/2608.23552">
-    <img src="https://img.shields.io/badge/arXiv-2608.23552-b31b1b.svg" alt="arXiv" />
-  </a>
+  <a href="#what-this-fork-adds">What it adds</a> &bull;
+  <a href="#checkpoint-benchmarks">Checkpoint benchmarks</a> &bull;
+  <a href="#first-results">First results</a> &bull;
+  <a href="#quick-start">Quick start</a> &bull;
+  <a href="#research-direction">Research direction</a> &bull;
+  <a href="UPSTREAM_README.md">Upstream README</a>
 </p>
 
 <p align="center">
-  <a href="https://trendshift.io/repositories/104249?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-104249" target="_blank" rel="noopener noreferrer">
-    <img src="https://trendshift.io/api/badge/repositories/104249" alt="PrimeIntellect-ai%2Fprime-agent | Trendshift" width="250" height="55" />
-  </a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license" /></a>
+  <img src="https://img.shields.io/badge/node-%E2%89%A522-339933.svg" alt="Node 22+" />
+  <img src="https://img.shields.io/badge/TypeScript-strict-3178c6.svg" alt="TypeScript" />
+  <a href="https://github.com/PrimeIntellect-ai/prime-agent"><img src="https://img.shields.io/badge/built%20on-Prime%20Agent%20v0.9-black.svg" alt="Built on Prime Agent" /></a>
+  <img src="https://img.shields.io/badge/observer%20tests-126-success.svg" alt="126 observer tests" />
 </p>
 
-Prime Agent is an open-source coding and research agent for general and long-running work. It is designed around two core abstractions:
+---
 
-- The **[Recursive Language Model (RLM)](https://www.primeintellect.ai/blog/rlm)** treats context as variables (*prompt-as-a-variable*) and tools like recursive subagents as function calls (*programmatic tool /sub-agent calling*) inside a persistent REPL.
-- The **[Continual Harness](https://arxiv.org/abs/2605.09998)** stores supplemental prompts, memories, skill descriptions, and reusable subagent specifications as durable state that Prime Agent can refine through small, evidence-backed updates, local to the session by default.
+Autonomous LLM agents are now run for hours or days in a loop. When those runs go wrong they
+rarely fail loudly: a tool call fails silently, state goes stale, a credential expires, and the
+final output still looks plausible. You cannot improve a long-running agent you cannot see, and
+you cannot trust a harness change you have not measured.
 
-Prime Agent combines a persistent Python control environment with durable harness state, so useful working context and reusable operating patterns can outlive a single chat window.
+This repository is my working lab for that problem. It is a fork of
+[Prime Intellect's **Prime Agent**](https://github.com/PrimeIntellect-ai/prime-agent), an
+open-source *self-improving RLM harness* (persistent Python REPL as the only model tool,
+recursive `rlm(...)` subagents, daemon-backed background sessions, and a *Continual Harness*
+that refines its own prompts, memories and skills). On top of it I built three things:
 
-- **Everything is programmatic:** a persistent Python REPL is the built-in model tool; file operations, shell commands, tool use, subagents, and context management happen through code.
-- **Subagents are built in:** `rlm(...)` spawns real child agents for parallel or background work and returns their results programmatically.
-- **The harness can improve:** `/refine` reviews the current trajectory and can apply small, evidence-backed updates to supplemental harness state. It never rewrites the immutable base system prompt, and recorded snapshots support rollback.
-- **Skills are executable:** skills are importable Python packages, and the built-in skill creator can turn recurring workflows into project or personal skills.
-- **Sessions run in the background:** daemon-backed agents keep running when the terminal disconnects and can be reattached later.
-- **Agents communicate directly:** running agents can exchange messages and orchestrate one another without routing everything through the user.
-- **Long tasks keep moving:** automatic compaction, persistent goals, heartbeats, schedules, autonomous mode, and retained subagents preserve progress across turns and terminal sessions.
+1. **An observer**: a web UI that shows what every agent in a fleet is doing, live and after the fact.
+2. **Checkpoint benchmarks**: a way to freeze real moments from real sessions and test harness
+   changes against them, next to the unmodified harnesses, instead of assuming they help.
+3. **Infrastructure to run it unattended**: containerised deployment to cloud CPU/GPU machines and
+   a VPS, local and self-hosted model providers, and operator-in-the-loop skills for the steps only
+   a person can do.
 
-## Getting Started
+> The core RLM harness and its paper are Prime Intellect's work (see [Credits](#credits)). Everything
+> described below as *added* is mine.
 
-Install the latest stable release on macOS or Linux:
+## What this fork adds
 
-```bash
-curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh
+| Area | What it does | Where |
+|---|---|---|
+| **Observer** | Sidecar web UI over the harness daemon. Fleet signal board, RLM spawn-tree **lineage**, per-session page hosting the real agent terminal (xterm.js over a PTY), agent-to-agent **comms**, Continual Harness entries with refinement **diffs and rollback**, schedules and heartbeats, ops console with one-click redeploy. Never modifies harness state it does not own. | [`observer/`](observer/) |
+| **Checkpoint benchmarks** | Capture a moment from a live session, mine finished sessions for major decisions, generate skill variants, run them as arms against raw Prime Agent and raw Claude Code, judge against explicit criteria, re-run on a schedule, and let an **advisor** inject winning skills into live sessions. | [`observer/src/server/bench/`](observer/src/server/bench/) |
+| **Operator-in-the-loop skills** | `human` (ask / choose / hand off steps such as verification codes or identity checks, depth-gated so subagents cannot prompt the operator) and `purchase` (budgeted spending where every purchase needs the operator's approval). | [`packages/coding-agent/skills/`](packages/coding-agent/skills/) |
+| **Deployment** | One container image for the daemon + observer, supervised with restart-on-redeploy; RunPod CPU pod with a network volume, a GPU pod serving a self-hosted model with vLLM, a flat-rate VPS sandbox, and a pull-only folder binding back to the laptop. | [`deploy/`](deploy/) |
+| **Model providers** | Self-hosted vLLM, an OpenAI-compatible hosted provider, and `m1-lab`: llama.cpp on a 64 GB Apple-silicon lab machine exposed to the harness as a provider. `PRIME_MODEL_ONLY` pins a sandbox to one provider. | [`deploy/models.json`](deploy/models.json), [`deploy/m1-lab/`](deploy/m1-lab/) |
+| **Stress tests** | Written reports for every deployment and harness change, including the failures each one surfaced. | [`deploy/stress-test-*.md`](deploy/) |
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Host["Machine running the harness (laptop, cloud pod or VPS)"]
+    D["prime-agent daemon<br/>(upstream RLM harness)"]
+    S1["session"]:::s
+    S2["session"]:::s
+    R["rlm(...) subagents"]:::s
+    D --- S1 & S2
+    S1 --- R
+    O["observer<br/>node:http + ws, React UI"]
+    B["checkpoint bench<br/>capture · mine · run · judge · advisor"]
+    O --- B
+    O -- "unix socket<br/>(public daemon API)" --> D
+    O -- "reads sessions, artifacts,<br/>harness_state.json" --> FS[("agent dir")]
+  end
+  B -- "isolated trials" --> T1["Prime Agent arms"]
+  B -- "isolated trials" --> T2["Claude Code arms"]
+  D -- providers --> M1["Anthropic / hosted"]
+  D -- providers --> M2["self-hosted vLLM (GPU pod)"]
+  D -- providers --> M3["m1-lab llama.cpp"]
+  U(("operator")) -- "browser" --> O
+  classDef s fill:#f6f6f6,stroke:#999;
 ```
 
-The installer downloads a versioned release, verifies its SHA-256 checksum, installs the `prime-agent` command, and can prepare the Python runtime used by the agent.
+## Checkpoint benchmarks
 
-Start Prime Agent from the repository or directory you want it to work in:
+Harness changes such as a new skill, a new prompt or a new memory are easy to believe in and hard to
+measure. Checkpoint benchmarks turn real trajectories into repeatable tests.
+
+1. **Capture.** Freeze a session at an anchor (a user message or mid-turn): the transcript up to that
+   point as a forkable session, harness memory **rewound to the anchor time** (so a trial can never
+   read notes the original session wrote about its own solution), settings, and the workspace from a
+   shadow-git recorder that snapshots on every user message.
+2. **Specify.** A helper drafts the goal, required and optional final-state criteria, and judge
+   instructions. The operator's desired trajectory is kept judge-only, and everything is editable.
+3. **Mine.** A finished session is windowed into major decisions (with screenshots), and each can
+   become a task.
+4. **Experiment.** Describe a change and get *N* variants as `SKILL.md`. Arms are
+   harness × variant × model × memory mode (`snapshot`, `current`, `none`), always including the
+   **raw** Prime Agent and **raw** Claude Code baselines. A variant is inserted identically on both
+   harnesses.
+5. **Run and judge.** Each trial gets an isolated agent dir and its own daemon (Prime Agent) or a fresh
+   private config dir (Claude Code). A read-only judge scores the final workspace from a git diff, and
+   required criteria are enforced server-side. Every run records repo commit, harness version and a
+   memory stamp, because these drift between scheduled re-runs.
+6. **Advise.** Optionally, an advisor watches live sessions and, when a major step starts that a
+   verified skill fits (it beats the raw arm by a margin), steers the skill in.
+
+## First results
+
+First live end-to-end run (2026-09-14, one task, one repeat per arm; full report in
+[`deploy/stress-test-bench-2026-09-14.md`](deploy/stress-test-bench-2026-09-14.md)). The task came
+from a real session: writing launch copy without first researching competitors.
+
+| Arm | Passed | Score | Agent cost | Time |
+|---|---|---|---|---|
+| Prime Agent, raw | 0/1 | 0.05 | $0.043 | 11 s |
+| Claude Code, raw | 0/1 | 0.05 | $0.090 | 16 s |
+| Prime Agent + competitor-research skill | 0/1 | 0.55 | $0.217 | 133 s |
+| Claude Code + competitor-research skill | 1/1 | 0.92 | $0.341 | 88 s |
+
+Both raw harnesses skipped research and wrote a single option. With the skill, both researched live.
+A single repeat is not evidence, and the more useful outcome was the set of failures the run exposed.
+All four were fixed:
+
+- **Trials shared the operator's OAuth login.** A trial refreshing its copy rotated the refresh token
+  and silently logged out the operator's own daemon. Trials now get static credentials only.
+- **Every old session looked active at boot**, so the recorder snapshotted all of them.
+- **Advisor → detector feedback loop.** The advisor's own injected message was captured as a new
+  benchmark request, so the system was creating tasks from its own output.
+- **A UI action called a CLI command that no longer existed upstream.**
+
+These are exactly the kind of quiet, compounding failures long-running agent systems produce, and
+they motivate the research direction below.
+
+## Quick start
+
+Requirements: Node 22+, Python 3.11+ (with [`uv`](https://docs.astral.sh/uv/)), git.
 
 ```bash
-cd /path/to/project
-prime-agent
+git clone https://github.com/erikcik/prime-agent-eray.git
+cd prime-agent-eray
+npm ci && npm run build            # upstream harness
+./prime-agent.sh                    # interactive agent (see UPSTREAM_README.md for auth/providers)
+
+# observer
+cd observer && npm install && npm run build
+PRIME_OBSERVER_TOKEN=$(openssl rand -hex 24) ../deploy/run-observer.sh   # http://127.0.0.1:8790
 ```
 
-On first launch, run `/login` to choose a subscription or API-key provider. Prime Agent works in the current directory and can run commands and modify files there. Use a disposable clone, clean worktree, or another checkpoint you can inspect and restore.
+Deployment guides: [`deploy/README.md`](deploy/README.md) (container + RunPod),
+[`deploy/README-vllm.md`](deploy/README-vllm.md) (self-hosted model on a GPU pod),
+[`deploy/m1-lab/README.md`](deploy/m1-lab/README.md) (Apple-silicon lab machine),
+[`deploy/vps/vps.sh`](deploy/vps/vps.sh) (VPS sandbox).
 
-> [!WARNING]
-> Prime Agent executes model-generated Python and project commands with your user permissions. Its worker and kernel processes improve lifecycle isolation and recovery; they are **not** a security sandbox. Review changes and use trusted repositories, instructions, skills, and extensions only. Run untrusted code or instructions in an external sandbox or restricted environment.
+Tests: `cd observer && npm run check && npm test` (126 tests; the server boots against a fixture agent
+dir with the daemon offline).
 
-Useful commands:
+## Repository layout
 
-```bash
-prime-agent agents                   # Browse running, idle, and saved sessions
-prime-agent attach <agent>           # Reattach to a running session
-prime-agent --resume [path|id]       # Browse sessions or resume one directly
-prime-agent status                   # Inspect background service state
-prime-agent doctor [--fix]           # Inspect or repair background services
-prime-agent update [--force]         # Update Prime Agent
-prime-agent shutdown [--force]       # Stop every agent, worker, and background service
+```
+packages/          upstream Prime Agent (RLM harness, TUI, providers)  + skills/human, skills/purchase
+observer/          observer web UI and checkpoint benchmarks            (added)
+deploy/            image, entrypoint, pods, VPS, m1-lab, stress-test reports (added)
+UPSTREAM_README.md the original Prime Agent README
 ```
 
-## Built for Long-Running Work
-Prime Agent is built for long-running work, especially for evaluations in research. These features are available in the TUI, and when run autonomously.
+## Research direction
 
-- **Continual Harness:** `/refine` can persist focused, reviewable lessons as supplemental prompts, memories, reusable skill descriptions, or subagent specifications, with recorded refinement history. It does not replace packaging and reviewing new executable skills.
-- **Direct agent-to-agent communication:** running agents and retained subagents can discover one another, exchange messages, and steer active work.
-- **Daemon-backed continuity:** active sessions, Python REPL state, schedules, and subagents keep running when the terminal detaches and can be reattached later.
-- **Heartbeats and schedules:** `/heartbeat`, `rlm_heartbeat`, and `prime-agent schedule` can re-enter a session periodically or at a specific time.
-- **Persistent goals:** `/goal` keeps an objective and its progress active across turns until it is completed, paused, or cleared.
-- **Bounded autonomous mode:** `/autonomous` continues within configured turn, token, and time budgets and can run user-defined quality gates. A passed gate checks only what that gate verifies; reaching a limit does not imply task success.
+**What breaks in long-horizon LLM agent loops?** Multi-day runs fail through chains of small events
+(a silent tool failure, then stale state, then an expired credential, then a confident but wrong
+result) rather than one obvious error. My next step is to:
 
-## Documentation
+1. log structured failure events from long runs of this harness,
+2. build a taxonomy of those events,
+3. test whether failures cascade in a consistent **order**, treating a run log as a noisy event
+   sequence, and
+4. check whether the inferred stage predicts that a run is going to fail earlier than a timeout or an
+   error count does.
 
-- [Quickstart](packages/coding-agent/docs/quickstart.md) — install, authenticate, and run a first session
-- [Usage and CLI reference](packages/coding-agent/docs/usage.md) — commands, sessions, autonomous limits, and output modes
-- [Long-running and background agents](packages/coding-agent/docs/long-running-agents.md) — detach and reattach, goals, heartbeats, and schedules
-- [RLM programming model](packages/coding-agent/docs/rlm.md) — the persistent Python REPL, subagents, skills, and the trust model
-- [JSON mode](packages/coding-agent/docs/json.md) and [RPC mode](packages/coding-agent/docs/rpc.md) — headless automation and integrations
-- [Skills](packages/coding-agent/docs/skills.md) — install and create reusable capabilities
-- [Provider setup](packages/coding-agent/docs/providers.md) — subscription and API-key providers
-- [Architecture overview](packages/coding-agent/docs/architecture.md) — daemon, worker, kernel, and persistence boundaries
-- [Development](packages/coding-agent/docs/development.md) — build and run from source
+This is also the subject of my final-year project at the University of Sussex.
 
-## Contributing
+## Credits
 
-Start with a GitHub Discussion for [general questions](https://github.com/PrimeIntellect-ai/prime-agent/discussions/categories/general), [bug reports](https://github.com/PrimeIntellect-ai/prime-agent/discussions/categories/bug-reports), and [feature requests](https://github.com/PrimeIntellect-ai/prime-agent/discussions/categories/feature-requests). Maintainers promote accepted work into Issues, and pull requests are reviewed from maintainers and vouched contributors.
+The RLM harness, the Continual Harness and everything under `packages/` (except the two skills noted
+above) come from [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) by
+[Prime Intellect](https://primeintellect.ai), building on [pi](https://github.com/badlogic/pi-mono)
+by Mario Zechner. The upstream paper is [arXiv:2608.23552](https://arxiv.org/abs/2608.23552). Their
+original README is preserved in [`UPSTREAM_README.md`](UPSTREAM_README.md).
 
-Read the [contribution guidelines](CONTRIBUTING.md) for the full process. Report security vulnerabilities privately by following the [security policy](SECURITY.md).
-
-## Acknowledgements
-
-Our agent and TUI is built on top of [`pi`](https://github.com/earendil-works/pi). We thank the authors of `pi` for their valuable work.
+Fork additions by **Eray Baydemir** ([@erikcik](https://github.com/erikcik)), University of Sussex.
 
 ## License
 
-Prime Agent is fully open source and released under the [MIT License](LICENSE).
-
-## Citation
-
-If you use this codebase in your research, please cite Prime Agent:
-
-```bibtex
-@article{karten2026prime,
-  title={Prime Agent: A Self-Improving RLM Harness},
-  author={Karten, Seth and Zhang, Alex L. and Thomas, Kevin and Müller, Sebastian and Bakouch, Elie and Auras, Daniel and Senghaas, Mika and Obeid, Fares and Dunas, Konstantin and Hagemann, Johannes and Jaghouar, Sami},
-  journal={arXiv preprint arXiv:2608.23552},
-  year={2026}
-}
-```
-
-Available at [https://arxiv.org/abs/2608.23552](https://arxiv.org/abs/2608.23552).
+MIT, as upstream. See [LICENSE](LICENSE).
